@@ -446,6 +446,11 @@
 
     ctx.clearRect(0, 0, this.width, this.height);
 
+    /* The wheel's column collapses to nothing on the end card, and a window
+       can be dragged arbitrarily small: below this there is no circle to draw,
+       and the gradients would be handed a negative radius. */
+    if (radius < 2) return;
+
     var total = this.totalWeight();
     if (!this.wedges.length || total <= 0) {
       this.drawEmpty(ctx, cx, cy, radius, outer, rimWidth);
@@ -775,6 +780,8 @@
   if (!doc || !doc.getElementById('app')) return;
 
   var S = global.Spinner;
+  var BASE_TITLE = 'Standup Spinner';
+
   var els = {
     app: doc.getElementById('app'),
     canvas: doc.getElementById('wheel'),
@@ -783,7 +790,19 @@
     hubLabel: doc.querySelector('.hub-label'),
     caption: doc.getElementById('caption'),
     bgImage: doc.getElementById('bgImage'),
-    announcer: doc.getElementById('announcer')
+    announcer: doc.getElementById('announcer'),
+    speakerName: doc.getElementById('speakerName'),
+    prompts: doc.getElementById('prompts'),
+    timer: doc.getElementById('timer'),
+    clock: doc.getElementById('clock'),
+    timerFill: doc.getElementById('timerFill'),
+    timerToggle: doc.getElementById('timerToggle'),
+    timerReset: doc.getElementById('timerReset'),
+    endTitle: doc.getElementById('endTitle'),
+    endSub: doc.getElementById('endSub'),
+    order: doc.getElementById('order'),
+    newRound: doc.getElementById('newRound'),
+    copyLink: doc.getElementById('copyLink')
   };
 
   var state = {
@@ -791,6 +810,9 @@
     spoken: [],
     away: [],
     speaker: null,
+    turns: [],
+    roundStartedAt: null,
+    phase: 'idle',
     busy: false
   };
 
@@ -831,6 +853,101 @@
     img.src = url;
   }
 
+  /* ---------------------------------------------------------------- timer
+   * Driven by timestamps, never by counting ticks: background tabs throttle
+   * timers, and the tab title countdown has to stay right precisely when the
+   * facilitator is looking at something else.
+   */
+  var timer = {
+    running: false,
+    since: 0,
+    accumulated: 0,
+    everStarted: false,
+    handle: null,
+    announcedAt: {}
+  };
+
+  function elapsedSeconds() {
+    var ms = timer.accumulated + (timer.running ? Date.now() - timer.since : 0);
+    return ms / 1000;
+  }
+
+  function remainingSeconds() {
+    return state.board.turnSeconds - elapsedSeconds();
+  }
+
+  function startTimer() {
+    if (timer.running) return;
+    timer.running = true;
+    timer.everStarted = true;
+    timer.since = Date.now();
+    timer.handle = global.setInterval(tickTimer, 200);
+    tickTimer();
+  }
+
+  function pauseTimer() {
+    if (!timer.running) return;
+    timer.accumulated += Date.now() - timer.since;
+    timer.running = false;
+    global.clearInterval(timer.handle);
+    timer.handle = null;
+    tickTimer();
+  }
+
+  function resetTimer() {
+    global.clearInterval(timer.handle);
+    timer.handle = null;
+    timer.running = false;
+    timer.accumulated = 0;
+    timer.everStarted = false;
+    timer.announcedAt = {};
+    tickTimer();
+  }
+
+  function tickTimer() {
+    var remaining = remainingSeconds();
+    var overtime = remaining < 0;
+    var warning = !overtime && remaining <= 15;
+
+    els.clock.textContent = S.formatRemaining(remaining);
+    els.timer.classList.toggle('overtime', overtime);
+    els.timer.classList.toggle('warning', warning);
+    els.timerToggle.textContent = timer.running ? 'Pause' : (timer.everStarted ? 'Resume' : 'Start');
+
+    var fraction = Math.max(0, Math.min(1, remaining / state.board.turnSeconds));
+    els.timerFill.style.transform = 'scaleX(' + (overtime ? 1 : fraction) + ')';
+
+    updateTitle(remaining);
+    announceTime(remaining);
+  }
+
+  function updateTitle(remaining) {
+    if (state.phase === 'speaking' && state.speaker) {
+      doc.title = S.formatRemaining(remaining) + ' — ' + state.speaker + ' · ' + BASE_TITLE;
+    } else {
+      doc.title = BASE_TITLE;
+    }
+  }
+
+  /* Spoken milestones, once each per turn. */
+  var MILESTONES = [
+    { at: 60, say: 'One minute left.' },
+    { at: 30, say: 'Thirty seconds left.' },
+    { at: 15, say: 'Fifteen seconds left.' },
+    { at: 0, say: "Time's up." }
+  ];
+
+  function announceTime(remaining) {
+    if (!timer.running) return;
+    MILESTONES.forEach(function (milestone) {
+      if (timer.announcedAt[milestone.at]) return;
+      if (remaining > milestone.at) return;
+      if (milestone.at > 0 && state.board.turnSeconds <= milestone.at) return;
+      timer.announcedAt[milestone.at] = true;
+      announce(milestone.say);
+    });
+  }
+
   /* ---------------------------------------------------------------- wheel */
   function wedgesFromState() {
     var names = S.eligible(state.board.participants, state.spoken, state.away);
@@ -850,17 +967,15 @@
     });
   }
 
-  function rebuildWheel() {
-    wheel.setWedges(wedgesFromState());
-    render();
-  }
-
+  /* ---------------------------------------------------------------- render */
   function render() {
     var status = S.rosterState(state.board.participants, state.spoken, state.away);
     var remaining = S.eligible(state.board.participants, state.spoken, state.away).length;
 
-    els.spinBtn.disabled = state.busy || remaining === 0;
-    els.hubLabel.textContent = state.speaker && remaining > 0 ? 'Next' : 'Spin';
+    els.app.className = 'state-' + state.phase + (state.busy ? ' spinning' : '');
+    els.spinBtn.disabled = state.busy ||
+      (state.phase === 'idle' && (status === 'setup' || status === 'all-away'));
+    els.hubLabel.textContent = !state.speaker ? 'Spin' : (remaining ? 'Next' : 'Finish');
 
     if (status === 'setup') {
       els.caption.textContent = 'Add participants to the URL to begin';
@@ -868,26 +983,61 @@
       els.caption.textContent = "Everyone's away today";
     } else if (state.busy) {
       els.caption.textContent = '';
-    } else if (state.speaker) {
+    } else if (state.phase === 'speaking') {
       els.caption.textContent = remaining
-        ? state.speaker + ' is up — ' + remaining + ' still to go'
-        : state.speaker + ' is up — last one';
+        ? remaining + ' still to go'
+        : 'Last one';
     } else {
       els.caption.textContent = remaining + ' on the wheel';
     }
+
+    if (state.phase === 'speaking') {
+      els.speakerName.textContent = state.speaker;
+      renderPrompts();
+    }
+    updateTitle(remainingSeconds());
+  }
+
+  function renderPrompts() {
+    if (els.prompts.childElementCount === state.board.prompts.length) return;
+    els.prompts.textContent = '';
+    state.board.prompts.forEach(function (prompt) {
+      var li = doc.createElement('li');
+      li.textContent = prompt;
+      els.prompts.appendChild(li);
+    });
   }
 
   function announce(message) {
     els.announcer.textContent = message;
   }
 
-  /* ----------------------------------------------------------------- spin */
-  function handleSpin() {
-    if (state.busy) return;
-    var pool = S.eligible(state.board.participants, state.spoken, state.away);
-    if (!pool.length) return;
+  /* ----------------------------------------------------------- the round */
+  function recordTurn() {
+    if (!state.speaker) return;
+    state.turns.push({
+      name: state.speaker,
+      seconds: timer.everStarted ? elapsedSeconds() : null,
+      overtime: timer.everStarted && remainingSeconds() < 0
+    });
+  }
 
+  function advance() {
+    if (state.busy) return;
+
+    /* Whatever just happened on screen, the turn that was running is over. */
+    recordTurn();
+    resetTimer();
+
+    var pool = S.eligible(state.board.participants, state.spoken, state.away);
+    if (!pool.length) {
+      if (state.speaker) { finishRound(); }
+      return;
+    }
+
+    if (state.roundStartedAt === null) state.roundStartedAt = Date.now();
     state.busy = true;
+    state.phase = state.speaker ? 'speaking' : 'idle';
     render();
 
     /* The previous speaker's dimmed wedge is swept away as this spin starts. */
@@ -895,10 +1045,7 @@
       var winner = S.pickWinner(pool);
       var index = wheel.wedges.map(function (w) { return w.name; }).indexOf(winner);
       if (index === -1) { state.busy = false; render(); return; }
-
-      wheel.spin(index, {
-        onDone: function () { land(winner); }
-      });
+      wheel.spin(index, { onDone: function () { land(winner); } });
     });
   }
 
@@ -906,20 +1053,98 @@
     state.speaker = winner;
     if (state.spoken.indexOf(winner) === -1) state.spoken.push(winner);
     state.busy = false;
+    state.phase = 'speaking';
     wheel.wedges.forEach(function (w) { w.spoken = w.name === winner; });
     wheel.draw();
     render();
-    announce(winner + ' is up next.');
+    announce(winner + ' is up. ' + S.formatClock(state.board.turnSeconds) + ' on the clock.');
+  }
+
+  function finishRound() {
+    state.phase = 'complete';
+    state.speaker = null;
+    render();
+    renderEndCard();
+    doc.title = BASE_TITLE;
+    announce('Standup finished.');
+  }
+
+  function renderEndCard() {
+    var total = state.roundStartedAt ? (Date.now() - state.roundStartedAt) / 1000 : 0;
+    var over = state.turns.filter(function (t) { return t.overtime; }).length;
+
+    els.endTitle.textContent = S.formatClock(total) + ' all in';
+    els.endSub.textContent = state.turns.length + (state.turns.length === 1 ? ' turn' : ' turns') +
+      (over ? ' · ' + over + ' went over' : ' · nobody went over');
+
+    els.order.textContent = '';
+    state.turns.forEach(function (turn) {
+      var li = doc.createElement('li');
+      if (turn.overtime) li.className = 'over';
+      if (turn.seconds === null) li.className = 'untimed';
+
+      var who = doc.createElement('span');
+      who.className = 'who';
+      who.textContent = turn.name;
+
+      var took = doc.createElement('span');
+      took.className = 'took';
+      took.textContent = turn.seconds === null ? 'not timed' : S.formatClock(turn.seconds);
+
+      li.appendChild(who);
+      li.appendChild(took);
+      els.order.appendChild(li);
+    });
+  }
+
+  function newRound() {
+    state.spoken = [];
+    state.turns = [];
+    state.speaker = null;
+    state.roundStartedAt = null;
+    state.phase = 'idle';
+    resetTimer();
+    wheel.setWedges(wedgesFromState());
+    render();
+    els.spinBtn.focus();
+  }
+
+  function copyBoardLink() {
+    var url = global.location.href;
+    var done = function () {
+      els.copyLink.textContent = 'Copied';
+      global.setTimeout(function () { els.copyLink.textContent = 'Copy board link'; }, 1600);
+    };
+    if (global.navigator.clipboard && global.navigator.clipboard.writeText) {
+      global.navigator.clipboard.writeText(url).then(done, function () {
+        els.copyLink.textContent = 'Copy failed';
+      });
+    } else {
+      els.copyLink.textContent = 'Copy failed';
+    }
   }
 
   /* ----------------------------------------------------------------- wire */
-  els.spinBtn.addEventListener('click', handleSpin);
+  els.spinBtn.addEventListener('click', advance);
+  els.timerToggle.addEventListener('click', function () {
+    timer.running ? pauseTimer() : startTimer();
+  });
+  els.timerReset.addEventListener('click', resetTimer);
+  els.newRound.addEventListener('click', newRound);
+  els.copyLink.addEventListener('click', copyBoardLink);
 
   doc.addEventListener('keydown', function (event) {
+    var tag = doc.activeElement && doc.activeElement.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+
     if (event.key === ' ' || event.code === 'Space') {
-      if (doc.activeElement && doc.activeElement.tagName === 'TEXTAREA') return;
       event.preventDefault();
-      if (!els.spinBtn.disabled) handleSpin();
+      if (!els.spinBtn.disabled) advance();
+      return;
+    }
+    if ((event.key === 's' || event.key === 'S') && state.phase === 'speaking') {
+      event.preventDefault();
+      timer.running ? pauseTimer() : startTimer();
     }
   });
 
@@ -932,5 +1157,6 @@
   applyTheme();
   wheel.setWedges(wedgesFromState());
   wheel.resize();
+  resetTimer();
   render();
 })(typeof window !== 'undefined' ? window : globalThis);

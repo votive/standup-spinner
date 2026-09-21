@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="app">
+<div id="app" class="state-idle">
   <div class="bg-image" id="bgImage"></div>
   <div class="bg-scrim"></div>
 
@@ -29,6 +29,37 @@
       </div>
       <p class="wheel-caption" id="caption"></p>
     </div>
+
+    <section class="speaker" id="speaker" aria-labelledby="speakerName">
+      <div class="speaker-inner">
+        <p class="eyebrow">Now speaking</p>
+        <h1 class="speaker-name" id="speakerName"></h1>
+
+        <ul class="prompts" id="prompts"></ul>
+
+        <div class="timer" id="timer">
+          <div class="clock" id="clock">0:00</div>
+          <div class="track"><div class="fill" id="timerFill"></div></div>
+          <div class="timer-controls">
+            <button type="button" class="btn btn-primary" id="timerToggle">Start</button>
+            <button type="button" class="btn" id="timerReset">Reset</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="endcard" id="endcard" aria-labelledby="endTitle">
+      <div class="endcard-inner">
+        <p class="eyebrow">That's standup</p>
+        <h1 class="end-title" id="endTitle"></h1>
+        <p class="end-sub" id="endSub"></p>
+        <ol class="order" id="order"></ol>
+        <div class="end-actions">
+          <button type="button" class="btn btn-primary" id="newRound">New round</button>
+          <button type="button" class="btn" id="copyLink">Copy board link</button>
+        </div>
+      </div>
+    </section>
   </main>
 
   <div class="sr-only" id="announcer" aria-live="polite" role="status"></div>

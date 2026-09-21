@@ -85,22 +85,29 @@ body {
 .stage {
   position: relative;
   flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   min-height: 0;
-  padding: 0 24px 24px;
+  display: grid;
+  grid-template-columns: 1fr 0fr;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 clamp(16px, 3vw, 40px) clamp(16px, 3vh, 32px);
+  transition: grid-template-columns .55s cubic-bezier(.22, 1, .36, 1);
 }
+
+/* The wheel slides left and gives up half the stage to the speaker. */
+#app.state-speaking .stage { grid-template-columns: 1fr 1.02fr; }
+#app.state-complete .stage { grid-template-columns: 0fr 1fr; }
 
 .wheel-area {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  height: 100%;
-  width: 100%;
+  min-width: 0;
   min-height: 0;
 }
+
+#app.state-complete .wheel-area { opacity: 0; pointer-events: none; }
 
 /* The wrap just claims the leftover space; the canvas centres a circle in
    whatever shape that turns out to be. */
@@ -171,6 +178,207 @@ body {
   text-align: center;
 }
 
+/* ------------------------------------------------------------ speaker view */
+/* Both share the stage's second column: only one is ever visible, and the
+   end card must not wrap onto an implicit third track. */
+.speaker, .endcard {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .35s ease .12s, visibility 0s linear .5s;
+}
+
+#app.state-speaking .speaker,
+#app.state-complete .endcard {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity .4s ease .18s, visibility 0s;
+}
+
+/* While the wheel is spinning the outgoing speaker fades back, so nobody
+   reads a stale name and a freshly reset clock as if they were live. */
+#app.spinning .speaker-inner { opacity: .22; }
+
+.speaker-inner, .endcard-inner {
+  transition: opacity .25s ease;
+  width: 100%;
+  padding-left: clamp(16px, 3vw, 44px);
+  max-height: 100%;
+  overflow: auto;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  opacity: .55;
+}
+
+.speaker-name {
+  margin: 0 0 clamp(14px, 2.4vh, 26px);
+  font-size: clamp(34px, 6.4vw, 84px);
+  line-height: 1.02;
+  letter-spacing: -.02em;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+/* A memory aid, not a form. Nobody types into this app during standup. */
+.prompts {
+  list-style: none;
+  margin: 0 0 clamp(18px, 3vh, 34px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 34ch;
+}
+
+.prompts li {
+  position: relative;
+  padding-left: 22px;
+  font-size: clamp(14px, 1.7vh, 19px);
+  opacity: .78;
+}
+
+.prompts li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: .55em;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: .8;
+}
+
+/* -------------------------------------------------------------------- timer */
+.clock {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  font-size: clamp(40px, 8vh, 92px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -.02em;
+  transition: color .3s ease;
+}
+
+.timer.warning .clock { color: #ffb020; }
+.timer.overtime .clock { color: #ff5a52; }
+
+.track {
+  margin: 14px 0 18px;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255,255,255,.14);
+  overflow: hidden;
+  max-width: 420px;
+}
+
+.fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: background-color .3s ease;
+}
+
+.timer.warning .fill { background: #ffb020; }
+.timer.overtime .fill { background: #ff5a52; }
+
+.timer-controls { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.btn {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  padding: 11px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.28);
+  background: rgba(255,255,255,.07);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color .15s ease, transform .1s ease, border-color .15s ease;
+}
+
+.btn:hover { background: rgba(255,255,255,.15); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #16100a;
+}
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+
+/* ----------------------------------------------------------------- end card */
+.end-title {
+  margin: 0 0 8px;
+  font-size: clamp(30px, 5vw, 64px);
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+
+.end-sub {
+  margin: 0 0 clamp(16px, 2.6vh, 28px);
+  font-size: clamp(14px, 1.8vh, 19px);
+  opacity: .7;
+}
+
+.order {
+  list-style: none;
+  counter-reset: turn;
+  margin: 0 0 clamp(18px, 3vh, 30px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 440px;
+}
+
+.order li {
+  counter-increment: turn;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.06);
+  font-size: clamp(14px, 1.7vh, 18px);
+}
+
+.order li::before {
+  content: counter(turn);
+  font-size: 12px;
+  opacity: .5;
+  min-width: 1.2em;
+  font-variant-numeric: tabular-nums;
+}
+
+.order .who { font-weight: 600; flex: 1 1 auto; overflow-wrap: anywhere; }
+
+.order .took {
+  font-variant-numeric: tabular-nums;
+  opacity: .65;
+  font-size: .92em;
+}
+
+.order li.over { background: rgba(255,90,82,.16); }
+.order li.over .took { color: #ff8a84; opacity: 1; }
+.order li.untimed .took { font-style: italic; opacity: .45; }
+
+.end-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
 .sr-only {
   position: absolute;
   width: 1px; height: 1px;
@@ -181,7 +389,28 @@ body {
   border: 0;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 860px) {
   .topbar { padding: 12px 16px; }
-  .stage { padding: 0 12px 16px; }
+
+  /* A phone is a spectator, not the facilitator: stack, and let the wheel
+     become a strip above the speaker. */
+  .stage,
+  #app.state-speaking .stage,
+  #app.state-complete .stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    transition: none;
+  }
+
+  .speaker, .endcard { grid-column: 1; grid-row: 2; }
+  #app.state-speaking .wheel-area { flex: 0 0 34vh; }
+  /* With the wheel gone there is only the card, so it gets the whole stage
+     rather than being pushed into a second row under a blank one. */
+  #app.state-complete .wheel-area { display: none; }
+  #app.state-complete .stage { grid-template-rows: 1fr; }
+  #app.state-complete .endcard { grid-row: 1; }
+
+  .speaker-inner, .endcard-inner { padding-left: 0; padding-top: 12px; }
+  .speaker-name { font-size: clamp(30px, 9vw, 52px); }
+  .clock { font-size: clamp(38px, 12vw, 64px); }
 }
