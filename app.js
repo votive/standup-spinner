@@ -277,6 +277,75 @@
     return Math.floor(normalised / step) % wedgeCount;
   }
 
+  /* -------------------------------------------------------------- session
+   * A Session is the progress of one standup: who has spoken, who is away,
+   * and the turn currently running. It is held apart from the Board so it can
+   * be written to per-tab storage and read back after a refresh.
+   */
+  function packSession(state) {
+    return {
+      v: 1,
+      spoken: state.spoken.slice(),
+      away: state.away.slice(),
+      speaker: state.speaker,
+      phase: state.phase,
+      roundStartedAt: state.roundStartedAt,
+      turns: state.turns.map(function (turn) {
+        return { name: turn.name, seconds: turn.seconds, overtime: !!turn.overtime };
+      }),
+      timer: {
+        running: !!state.timer.running,
+        since: state.timer.since,
+        accumulated: state.timer.accumulated,
+        everStarted: !!state.timer.everStarted
+      }
+    };
+  }
+
+  /* Tolerant by design: a half-written or hand-edited session should start a
+   * fresh standup, never throw on the way to the first render. */
+  function unpackSession(raw) {
+    var data = raw;
+    if (typeof raw === 'string') {
+      try { data = JSON.parse(raw); } catch (e) { return null; }
+    }
+    if (!data || typeof data !== 'object' || data.v !== 1) return null;
+
+    var phase = data.phase === 'speaking' || data.phase === 'complete' ? data.phase : 'idle';
+    var speaker = typeof data.speaker === 'string' ? data.speaker : null;
+    if (phase === 'speaking' && !speaker) phase = 'idle';
+
+    var timer = (data.timer && typeof data.timer === 'object') ? data.timer : {};
+
+    return {
+      spoken: stringList(data.spoken),
+      away: stringList(data.away),
+      speaker: speaker,
+      phase: phase,
+      roundStartedAt: isFinite(data.roundStartedAt) ? data.roundStartedAt : null,
+      turns: (Array.isArray(data.turns) ? data.turns : [])
+        .filter(function (turn) { return turn && typeof turn.name === 'string'; })
+        .map(function (turn) {
+          return {
+            name: turn.name,
+            seconds: isFinite(turn.seconds) && turn.seconds !== null ? turn.seconds : null,
+            overtime: !!turn.overtime
+          };
+        }),
+      timer: {
+        running: !!timer.running,
+        since: isFinite(timer.since) ? timer.since : 0,
+        accumulated: isFinite(timer.accumulated) && timer.accumulated >= 0 ? timer.accumulated : 0,
+        everStarted: !!timer.everStarted
+      }
+    };
+  }
+
+  function stringList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.filter(function (item) { return typeof item === 'string'; });
+  }
+
   /* --------------------------------------------------------------- timing */
   function formatClock(seconds) {
     var total = Math.max(0, Math.floor(seconds));
@@ -403,6 +472,8 @@
     wedgeAtPointer: wedgeAtPointer,
     formatClock: formatClock,
     formatRemaining: formatRemaining,
+    packSession: packSession,
+    unpackSession: unpackSession,
     inkFor: inkFor,
     contrastRatio: contrastRatio,
     paletteIndex: paletteIndex,
@@ -1081,6 +1152,7 @@
     handle: null,
     announcedAt: {}
   };
+  state.timer = timer;
 
   function elapsedSeconds() {
     var ms = timer.accumulated + (timer.running ? Date.now() - timer.since : 0);
@@ -1100,6 +1172,7 @@
     timer.since = Date.now();
     timer.handle = global.setInterval(tickTimer, 200);
     tickTimer();
+    saveSession();
   }
 
   function pauseTimer() {
@@ -1109,6 +1182,7 @@
     global.clearInterval(timer.handle);
     timer.handle = null;
     tickTimer();
+    saveSession();
   }
 
   function resetTimer() {
@@ -1253,6 +1327,67 @@
     els.announcer.textContent = message;
   }
 
+  /* ------------------------------------------------------------- storage
+   * The Session lives in sessionStorage: it survives a refresh, and dies with
+   * the tab, which is exactly the lifetime of one standup. Every read and
+   * write is guarded because storage throws outright in some private windows.
+   */
+  var SESSION_KEY = 'spinner:session';
+
+  function saveSession() {
+    try {
+      global.sessionStorage.setItem(SESSION_KEY, JSON.stringify(S.packSession(state)));
+    } catch (e) { /* the round simply will not survive a refresh */ }
+  }
+
+  function loadSession() {
+    var raw;
+    try {
+      raw = global.sessionStorage.getItem(SESSION_KEY);
+    } catch (e) {
+      return null;
+    }
+    return S.unpackSession(raw);
+  }
+
+  function clearSession() {
+    try {
+      global.sessionStorage.removeItem(SESSION_KEY);
+    } catch (e) { /* nothing to do */ }
+  }
+
+  /* Restoring is deliberately name-based, like everything else about
+   * progress: names that have since left the roster match nobody and are
+   * ignored rather than resurrecting anyone (ADR 0005). */
+  function restoreSession() {
+    var saved = loadSession();
+    if (!saved) return;
+
+    state.spoken = saved.spoken;
+    state.away = saved.away;
+    state.speaker = saved.speaker;
+    state.phase = saved.phase;
+    state.roundStartedAt = saved.roundStartedAt;
+    state.turns = saved.turns;
+
+    timer.running = saved.timer.running;
+    timer.since = saved.timer.since;
+    timer.accumulated = saved.timer.accumulated;
+    timer.everStarted = saved.timer.everStarted;
+
+    /* A clock that was running when the tab closed keeps running: it is
+       driven by timestamps, so it has been counting the whole time. */
+    if (timer.running) {
+      timer.handle = global.setInterval(tickTimer, 200);
+    }
+
+    if (state.phase === 'speaking' && state.speaker &&
+        state.board.participants.indexOf(state.speaker) === -1) {
+      state.phase = 'idle';
+      state.speaker = null;
+    }
+  }
+
   /* ------------------------------------------------------------ the board
    * The Setup panel is the only way the Board is edited, and every edit is
    * written straight back into the URL. Roster edits are deliberately
@@ -1284,6 +1419,7 @@
     });
 
     syncUrl();
+    saveSession();
     renderSetupWarnings(text);
     renderPresence();
     rebuildWheel();
@@ -1358,6 +1494,7 @@
     syncPresence();
     rebuildWheel();
     render();
+    saveSession();
   }
 
   /* Updated in place rather than rebuilt: replacing the rows would throw
@@ -1536,6 +1673,7 @@
     }
 
     if (state.roundStartedAt === null) state.roundStartedAt = Date.now();
+    saveSession();
     state.busy = true;
     state.phase = state.speaker ? 'speaking' : 'idle';
     render();
@@ -1562,6 +1700,7 @@
     if (state.pendingRebuild) rebuildWheel();
     render();
     sound.land();
+    saveSession();
     announce(winner + ' is up. ' + S.formatClock(state.board.turnSeconds) + ' on the clock.');
   }
 
@@ -1571,6 +1710,7 @@
     state.speaker = null;
     render();
     renderEndCard();
+    saveSession();
     doc.title = BASE_TITLE;
     announce('Standup finished.');
   }
@@ -1611,6 +1751,7 @@
     state.roundStartedAt = null;
     state.phase = 'idle';
     resetTimer();
+    clearSession();
     wheel.setWedges(wedgesFromState());
     render();
     els.spinBtn.focus();
@@ -1664,7 +1805,10 @@
   els.timerToggle.addEventListener('click', function () {
     timer.running ? pauseTimer() : startTimer();
   });
-  els.timerReset.addEventListener('click', resetTimer);
+  els.timerReset.addEventListener('click', function () {
+    resetTimer();
+    saveSession();
+  });
   els.newRound.addEventListener('click', newRound);
   els.copyLink.addEventListener('click', function () { copyBoardLink(els.copyLink); });
   els.copyLinkSetup.addEventListener('click', function () { copyBoardLink(els.copyLinkSetup); });
@@ -1721,13 +1865,17 @@
     global.addEventListener('resize', function () { wheel.resize(); });
   }
 
+  restoreSession();
   applyTheme();
   wheel.setWedges(wedgesFromState());
   wheel.resize();
-  resetTimer();
+  /* tickTimer, not resetTimer: a restored Session may have a clock already
+     running, and resetting here would silently throw it away. */
+  tickTimer();
   renderSetup();
   renderMuteButton();
   render();
+  if (state.phase === 'complete') renderEndCard();
 
   /* First visit: nothing to spin, so the panel is the screen. */
   if (!state.board.participants.length) openSetup();

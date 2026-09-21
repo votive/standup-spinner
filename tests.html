@@ -245,6 +245,56 @@
     eq(S.solveRotation(2.5, 0, 0, 4), 2.5);
   });
 
+  /* ---------------------------------------------------------------- session */
+  suite('Session');
+
+  test('round-trips a standup in progress', function () {
+    var state = {
+      spoken: ['Ada', 'Grace'],
+      away: ['Hopper'],
+      speaker: 'Grace',
+      phase: 'speaking',
+      roundStartedAt: 1700000000000,
+      turns: [{ name: 'Ada', seconds: 74.2, overtime: false }],
+      timer: { running: true, since: 1700000000100, accumulated: 500, everStarted: true }
+    };
+    var back = S.unpackSession(JSON.stringify(S.packSession(state)));
+    eq(back.spoken, state.spoken);
+    eq(back.away, state.away);
+    eq(back.speaker, 'Grace');
+    eq(back.phase, 'speaking');
+    eq(back.turns, state.turns);
+    eq(back.timer, state.timer);
+  });
+
+  test('keeps an untimed turn untimed rather than turning it into zero', function () {
+    var packed = S.packSession({
+      spoken: [], away: [], speaker: null, phase: 'idle', roundStartedAt: null,
+      turns: [{ name: 'Ada', seconds: null, overtime: false }],
+      timer: {}
+    });
+    eq(S.unpackSession(JSON.stringify(packed)).turns[0].seconds, null);
+  });
+
+  test('refuses anything it did not write', function () {
+    eq(S.unpackSession('not json at all'), null);
+    eq(S.unpackSession('{"v":99,"spoken":["Ada"]}'), null);
+    eq(S.unpackSession(null), null);
+    eq(S.unpackSession('[]'), null);
+  });
+
+  test('survives a half-written or hand-edited session', function () {
+    var back = S.unpackSession('{"v":1,"spoken":"Ada","turns":[{"nope":1},null],"phase":"banana"}');
+    eq(back.spoken, []);
+    eq(back.turns, []);
+    eq(back.phase, 'idle');
+    eq(back.timer.accumulated, 0);
+  });
+
+  test('a speaking session with no speaker falls back to idle', function () {
+    eq(S.unpackSession('{"v":1,"phase":"speaking"}').phase, 'idle');
+  });
+
   /* ------------------------------------------------------------- appearance */
   suite('Appearance');
 
