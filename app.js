@@ -427,6 +427,42 @@
     this.draw();
   };
 
+  Wheel.prototype.metrics = function () {
+    var size = this.size;
+    var rimWidth = Math.max(8, size * 0.046);
+    /* The marker overhangs the rim, so the wheel is inset to leave room for
+       it rather than letting it clip against the canvas edge. */
+    var outer = size / 2 - 2 - size * POINTER_OVERHANG;
+    return {
+      size: size,
+      cx: this.width / 2,
+      cy: this.height / 2,
+      rimWidth: rimWidth,
+      outer: outer,
+      radius: outer - rimWidth
+    };
+  };
+
+  /* Which wedge is under a point, in CSS pixels relative to the canvas.
+   * Returns null for the rim, the hub and anything outside. */
+  Wheel.prototype.wedgeAt = function (x, y) {
+    var m = this.metrics();
+    var total = this.totalWeight();
+    if (m.radius < 2 || !this.wedges.length || total <= 0) return null;
+
+    var dx = x - m.cx, dy = y - m.cy;
+    var distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance > m.radius || distance < m.size * 0.12) return null;
+
+    var relative = ((Math.atan2(dy, dx) - POINTER_ANGLE - this.rotation) % TAU + TAU) % TAU;
+    var accumulated = 0;
+    for (var i = 0; i < this.wedges.length; i++) {
+      accumulated += (this.wedges[i].weight / total) * TAU;
+      if (relative < accumulated) return this.wedges[i];
+    }
+    return this.wedges[this.wedges.length - 1];
+  };
+
   Wheel.prototype.totalWeight = function () {
     return this.wedges.reduce(function (sum, w) { return sum + w.weight; }, 0);
   };
@@ -436,13 +472,11 @@
     var size = this.size;
     if (!size) return;
 
-    var cx = this.width / 2, cy = this.height / 2;
-    var rimWidth = Math.max(8, size * 0.046);
-    /* The marker overhangs the rim, so the wheel is inset to leave room for
-       it rather than letting it clip against the canvas edge. */
-    var outer = size / 2 - 2 - size * POINTER_OVERHANG;
-    var radius = outer - rimWidth;
-    var palette = this.palette;
+    var m = this.metrics();
+    var cx = m.cx, cy = m.cy;
+    var rimWidth = m.rimWidth;
+    var outer = m.outer;
+    var radius = m.radius;
 
     ctx.clearRect(0, 0, this.width, this.height);
 
@@ -802,7 +836,21 @@
     endSub: doc.getElementById('endSub'),
     order: doc.getElementById('order'),
     newRound: doc.getElementById('newRound'),
-    copyLink: doc.getElementById('copyLink')
+    copyLink: doc.getElementById('copyLink'),
+    setup: doc.getElementById('setup'),
+    setupToggle: doc.getElementById('setupToggle'),
+    setupClose: doc.getElementById('setupClose'),
+    setupScrim: doc.getElementById('setupScrim'),
+    roster: doc.getElementById('roster'),
+    rosterHint: doc.getElementById('rosterHint'),
+    dupWarn: doc.getElementById('dupWarn'),
+    presence: doc.getElementById('presence'),
+    turnLength: doc.getElementById('turnLength'),
+    copyLinkSetup: doc.getElementById('copyLinkSetup'),
+    awayStrip: doc.getElementById('awayStrip'),
+    toast: doc.getElementById('toast'),
+    toastText: doc.getElementById('toastText'),
+    toastUndo: doc.getElementById('toastUndo')
   };
 
   var state = {
@@ -813,7 +861,10 @@
     turns: [],
     roundStartedAt: null,
     phase: 'idle',
-    busy: false
+    busy: false,
+    setupOpen: false,
+    duplicates: [],
+    pendingRebuild: false
   };
 
   var wheel = new global.SpinnerWheel(els.canvas);
@@ -971,25 +1022,32 @@
   function render() {
     var status = S.rosterState(state.board.participants, state.spoken, state.away);
     var remaining = S.eligible(state.board.participants, state.spoken, state.away).length;
+    var blocked = state.duplicates.length > 0;
 
-    els.app.className = 'state-' + state.phase + (state.busy ? ' spinning' : '');
-    els.spinBtn.disabled = state.busy ||
-      (state.phase === 'idle' && (status === 'setup' || status === 'all-away'));
+    els.app.className = 'state-' + state.phase +
+      (state.busy ? ' spinning' : '') +
+      (state.setupOpen ? ' setup-open' : '');
+
+    els.spinBtn.disabled = state.busy || blocked || (!state.speaker && remaining === 0);
     els.hubLabel.textContent = !state.speaker ? 'Spin' : (remaining ? 'Next' : 'Finish');
 
-    if (status === 'setup') {
-      els.caption.textContent = 'Add participants to the URL to begin';
-    } else if (status === 'all-away') {
-      els.caption.textContent = "Everyone's away today";
+    /* A live turn outranks the roster's state: emptying the roster mid-round
+       should not put "add participants" next to a Finish button. */
+    if (blocked) {
+      els.caption.textContent = 'Duplicate names — open Setup to fix';
     } else if (state.busy) {
       els.caption.textContent = '';
     } else if (state.phase === 'speaking') {
-      els.caption.textContent = remaining
-        ? remaining + ' still to go'
-        : 'Last one';
+      els.caption.textContent = remaining ? remaining + ' still to go' : 'Last one';
+    } else if (status === 'setup') {
+      els.caption.textContent = 'Add participants in Setup to begin';
+    } else if (status === 'all-away') {
+      els.caption.textContent = "Everyone's away today";
     } else {
       els.caption.textContent = remaining + ' on the wheel';
     }
+
+    renderAwayStrip();
 
     if (state.phase === 'speaking') {
       els.speakerName.textContent = state.speaker;
@@ -998,8 +1056,20 @@
     updateTitle(remainingSeconds());
   }
 
+  function renderAwayStrip() {
+    var away = state.board.participants.filter(function (name) {
+      return state.away.indexOf(name) !== -1;
+    });
+    els.awayStrip.hidden = away.length === 0;
+    els.awayStrip.textContent = away.length ? 'Away today · ' + away.join(', ') : '';
+  }
+
   function renderPrompts() {
-    if (els.prompts.childElementCount === state.board.prompts.length) return;
+    var current = [];
+    for (var i = 0; i < els.prompts.children.length; i++) {
+      current.push(els.prompts.children[i].textContent);
+    }
+    if (current.join('\u0000') === state.board.prompts.join('\u0000')) return;
     els.prompts.textContent = '';
     state.board.prompts.forEach(function (prompt) {
       var li = doc.createElement('li');
@@ -1010,6 +1080,193 @@
 
   function announce(message) {
     els.announcer.textContent = message;
+  }
+
+  /* ------------------------------------------------------------ the board
+   * The Setup panel is the only way the Board is edited, and every edit is
+   * written straight back into the URL. Roster edits are deliberately
+   * non-destructive: progress is keyed by name (ADR 0005), so adding a
+   * latecomer drops them onto the live wheel without resetting the round.
+   */
+  function syncUrl() {
+    var query = S.serializeBoard(state.board);
+    global.history.replaceState(null, '', global.location.pathname + query);
+  }
+
+  function rebuildWheel() {
+    /* Never reshape the wheel mid-spin: the animation is driving an index
+       into the wedge list it started with. */
+    if (state.busy) { state.pendingRebuild = true; return; }
+    state.pendingRebuild = false;
+    wheel.setWedges(wedgesFromState());
+  }
+
+  function applyRoster(text) {
+    var names = S.parseRosterText(text);
+    state.duplicates = S.findDuplicates(names);
+    state.board.participants = names;
+
+    /* Away is a fact about today, not part of the Board, but a name that has
+       left the roster should not keep haunting the away list. */
+    state.away = state.away.filter(function (name) {
+      return names.indexOf(name) !== -1;
+    });
+
+    syncUrl();
+    renderSetupWarnings(text);
+    renderPresence();
+    rebuildWheel();
+    render();
+  }
+
+  function renderSetupWarnings(text) {
+    var lines = String(text || '').split(/\r?\n/).filter(function (line) {
+      return line.trim().length > 0;
+    });
+
+    if (state.duplicates.length) {
+      els.dupWarn.hidden = false;
+      els.dupWarn.textContent = state.duplicates.length === 1
+        ? 'Two participants named "' + state.duplicates[0] +
+          '". Add a surname or initial — the wheel needs to tell them apart.'
+        : 'Duplicate names: ' + state.duplicates.join(', ') +
+          '. Add a surname or initial to each.';
+    } else {
+      els.dupWarn.hidden = true;
+      els.dupWarn.textContent = '';
+    }
+
+    var count = state.board.participants.length;
+    if (lines.length > S.MAX_PARTICIPANTS) {
+      els.rosterHint.textContent = 'Capped at ' + S.MAX_PARTICIPANTS +
+        ' — the rest are ignored. Past that it stops being a wheel.';
+    } else if (count) {
+      els.rosterHint.textContent = count + (count === 1 ? ' participant' : ' participants') +
+        ' · saved in the link above';
+    } else {
+      els.rosterHint.textContent = 'Paste a list, one name per line.';
+    }
+  }
+
+  function renderPresence() {
+    els.presence.textContent = '';
+    if (!state.board.participants.length) {
+      var empty = doc.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'Nobody on the wheel yet.';
+      els.presence.appendChild(empty);
+      return;
+    }
+
+    state.board.participants.forEach(function (name) {
+      var isAway = state.away.indexOf(name) !== -1;
+      var label = doc.createElement('label');
+      label.setAttribute('data-name', name);
+      if (isAway) label.className = 'away';
+
+      var box = doc.createElement('input');
+      box.type = 'checkbox';
+      box.checked = !isAway;
+      box.addEventListener('change', function () {
+        setPresence(name, box.checked);
+      });
+
+      var text = doc.createElement('span');
+      text.textContent = name;
+
+      label.appendChild(box);
+      label.appendChild(text);
+      els.presence.appendChild(label);
+    });
+  }
+
+  function setPresence(name, present) {
+    var index = state.away.indexOf(name);
+    if (present && index !== -1) state.away.splice(index, 1);
+    if (!present && index === -1) state.away.push(name);
+    syncPresence();
+    rebuildWheel();
+    render();
+  }
+
+  /* Updated in place rather than rebuilt: replacing the rows would throw
+   * away keyboard focus on every single toggle. */
+  function syncPresence() {
+    var labels = els.presence.querySelectorAll('label');
+    for (var i = 0; i < labels.length; i++) {
+      var name = labels[i].getAttribute('data-name');
+      var isAway = state.away.indexOf(name) !== -1;
+      labels[i].classList.toggle('away', isAway);
+      var box = labels[i].querySelector('input');
+      if (box.checked === isAway) box.checked = !isAway;
+    }
+  }
+
+  function renderSetup() {
+    if (doc.activeElement !== els.roster) {
+      els.roster.value = state.board.participants.join('\n');
+    }
+    if (doc.activeElement !== els.turnLength) {
+      els.turnLength.value = state.board.turnSeconds;
+    }
+    renderSetupWarnings(els.roster.value);
+    renderPresence();
+  }
+
+  function openSetup() {
+    state.setupOpen = true;
+    els.setupScrim.hidden = false;
+    els.setup.setAttribute('aria-hidden', 'false');
+    els.setupToggle.setAttribute('aria-expanded', 'true');
+    renderSetup();
+    render();
+    els.roster.focus();
+  }
+
+  function closeSetup() {
+    state.setupOpen = false;
+    els.setupScrim.hidden = true;
+    els.setup.setAttribute('aria-hidden', 'true');
+    els.setupToggle.setAttribute('aria-expanded', 'false');
+    render();
+    els.setupToggle.focus();
+  }
+
+  /* ---------------------------------------------------------------- toast */
+  var toastTimer = null;
+
+  /* Clicking a wedge is the fast path for marking someone away, so it needs
+   * insurance against a misclick during a live standup. */
+  function showToast(message, undo) {
+    global.clearTimeout(toastTimer);
+    els.toastText.textContent = message;
+    els.toast.hidden = false;
+    els.toastUndo.onclick = function () {
+      hideToast();
+      undo();
+    };
+    toastTimer = global.setTimeout(hideToast, 5000);
+  }
+
+  function hideToast() {
+    global.clearTimeout(toastTimer);
+    els.toast.hidden = true;
+    els.toastUndo.onclick = null;
+  }
+
+  function handleWheelClick(event) {
+    if (state.busy || state.setupOpen) return;
+    var rect = els.canvas.getBoundingClientRect();
+    var wedge = wheel.wedgeAt(event.clientX - rect.left, event.clientY - rect.top);
+    if (!wedge) return;
+
+    var name = wedge.name;
+    setPresence(name, false);
+    announce(name + ' marked away.');
+    showToast(name + ' is away today', function () {
+      setPresence(name, true);
+      announce(name + ' is back on the wheel.');
+    });
   }
 
   /* ----------------------------------------------------------- the round */
@@ -1056,6 +1313,7 @@
     state.phase = 'speaking';
     wheel.wedges.forEach(function (w) { w.spoken = w.name === winner; });
     wheel.draw();
+    if (state.pendingRebuild) rebuildWheel();
     render();
     announce(winner + ' is up. ' + S.formatClock(state.board.turnSeconds) + ' on the clock.');
   }
@@ -1098,6 +1356,7 @@
   }
 
   function newRound() {
+    hideToast();
     state.spoken = [];
     state.turns = [];
     state.speaker = null;
@@ -1109,18 +1368,19 @@
     els.spinBtn.focus();
   }
 
-  function copyBoardLink() {
-    var url = global.location.href;
-    var done = function () {
-      els.copyLink.textContent = 'Copied';
-      global.setTimeout(function () { els.copyLink.textContent = 'Copy board link'; }, 1600);
+  function copyBoardLink(button) {
+    var restore = function () { button.textContent = 'Copy board link'; };
+    var report = function (message) {
+      button.textContent = message;
+      global.setTimeout(restore, 1600);
     };
     if (global.navigator.clipboard && global.navigator.clipboard.writeText) {
-      global.navigator.clipboard.writeText(url).then(done, function () {
-        els.copyLink.textContent = 'Copy failed';
-      });
+      global.navigator.clipboard.writeText(global.location.href).then(
+        function () { report('Copied'); },
+        function () { report('Copy failed'); }
+      );
     } else {
-      els.copyLink.textContent = 'Copy failed';
+      report('Copy failed');
     }
   }
 
@@ -1131,11 +1391,43 @@
   });
   els.timerReset.addEventListener('click', resetTimer);
   els.newRound.addEventListener('click', newRound);
-  els.copyLink.addEventListener('click', copyBoardLink);
+  els.copyLink.addEventListener('click', function () { copyBoardLink(els.copyLink); });
+  els.copyLinkSetup.addEventListener('click', function () { copyBoardLink(els.copyLinkSetup); });
+
+  els.setupToggle.addEventListener('click', function () {
+    state.setupOpen ? closeSetup() : openSetup();
+  });
+  els.setupClose.addEventListener('click', closeSetup);
+  els.setupScrim.addEventListener('click', closeSetup);
+
+  els.roster.addEventListener('input', function () { applyRoster(els.roster.value); });
+
+  els.turnLength.addEventListener('input', function () {
+    var seconds = parseInt(els.turnLength.value, 10);
+    if (!isFinite(seconds) || seconds < 15 || seconds > 3600) return;
+    state.board.turnSeconds = seconds;
+    syncUrl();
+    if (!timer.everStarted) tickTimer();
+  });
+
+  els.turnLength.addEventListener('change', function () {
+    els.turnLength.value = state.board.turnSeconds;
+  });
+
+  els.canvas.addEventListener('click', handleWheelClick);
 
   doc.addEventListener('keydown', function (event) {
+    /* Escape is handled first and unconditionally: it is the way out of the
+       panel, and the panel puts the cursor straight into the textarea. */
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      state.setupOpen ? closeSetup() : openSetup();
+      return;
+    }
+
     var tag = doc.activeElement && doc.activeElement.tagName;
     if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+    if (state.setupOpen) return;
 
     if (event.key === ' ' || event.code === 'Space') {
       event.preventDefault();
@@ -1158,5 +1450,9 @@
   wheel.setWedges(wedgesFromState());
   wheel.resize();
   resetTimer();
+  renderSetup();
   render();
+
+  /* First visit: nothing to spin, so the panel is the screen. */
+  if (!state.board.participants.length) openSetup();
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -17,6 +17,7 @@
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">Standup Spinner</span>
     </div>
+    <button type="button" class="btn btn-ghost" id="setupToggle" aria-expanded="false" aria-controls="setup">Setup</button>
   </header>
 
   <main class="stage" id="stage">
@@ -28,6 +29,7 @@
         </button>
       </div>
       <p class="wheel-caption" id="caption"></p>
+      <p class="away-strip" id="awayStrip" hidden></p>
     </div>
 
     <section class="speaker" id="speaker" aria-labelledby="speakerName">
@@ -61,6 +63,45 @@
       </div>
     </section>
   </main>
+
+  <aside class="setup" id="setup" aria-label="Setup" aria-hidden="true">
+    <div class="setup-head">
+      <h2>Setup</h2>
+      <button type="button" class="btn btn-ghost" id="setupClose">Done</button>
+    </div>
+
+    <div class="field">
+      <label for="roster">Participants — one per line</label>
+      <textarea id="roster" rows="8" spellcheck="false" autocomplete="off"
+                placeholder="Ayesha&#10;Tom B.&#10;Jo"></textarea>
+      <p class="hint" id="rosterHint"></p>
+      <p class="warn" id="dupWarn" hidden></p>
+    </div>
+
+    <div class="field">
+      <p class="field-label">Here today</p>
+      <div class="presence" id="presence"></div>
+      <p class="hint">Unticking someone takes them off the wheel for this standup only. It never changes the board link.</p>
+    </div>
+
+    <div class="field">
+      <label for="turnLength">Turn length</label>
+      <div class="row">
+        <input type="number" id="turnLength" min="15" max="3600" step="15" inputmode="numeric">
+        <span class="unit">seconds</span>
+      </div>
+    </div>
+
+    <div class="setup-actions">
+      <button type="button" class="btn" id="copyLinkSetup">Copy board link</button>
+    </div>
+  </aside>
+  <div class="scrim-click" id="setupScrim" hidden></div>
+
+  <div class="toast" id="toast" hidden>
+    <span id="toastText"></span>
+    <button type="button" class="toast-undo" id="toastUndo">Undo</button>
+  </div>
 
   <div class="sr-only" id="announcer" aria-live="polite" role="status"></div>
 </div>
