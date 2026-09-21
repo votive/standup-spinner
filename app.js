@@ -31,7 +31,7 @@
     },
     neon: {
       label: 'Neon',
-      wedges: ['#ff2d95', '#00e5ff', '#7b2dff', '#00ffa3', '#ff6b35', '#c026d3'],
+      wedges: ['#ff2d95', '#00e5ff', '#7b2dff', '#ff6b35', '#c026d3', '#00ffa3'],
       bg: 'radial-gradient(ellipse at 50% 0%, #1e1035 0%, #0b0618 60%, #05030d 100%)',
       accent: '#00e5ff',
       rim: '#ff2d95',
@@ -39,7 +39,7 @@
     },
     sunrise: {
       label: 'Sunrise',
-      wedges: ['#ff7043', '#ffb300', '#ef5350', '#ffd54f', '#ff8a65', '#f4511e'],
+      wedges: ['#ff7043', '#ffb300', '#ef5350', '#ff8a65', '#f4511e', '#ffd54f'],
       bg: 'radial-gradient(ellipse at 50% 0%, #fff3e0 0%, #ffe0b2 55%, #ffccbc 100%)',
       accent: '#e64a19',
       rim: '#ffffff',
@@ -47,7 +47,7 @@
     },
     forest: {
       label: 'Forest',
-      wedges: ['#2e7d32', '#8d6e63', '#1b5e20', '#a1887f', '#43a047', '#6d4c41'],
+      wedges: ['#2e7d32', '#8d6e63', '#1b5e20', '#43a047', '#6d4c41', '#a1887f'],
       bg: 'radial-gradient(ellipse at 50% 0%, #17301c 0%, #0d1b10 60%, #060d08 100%)',
       accent: '#d4a373',
       rim: '#d4a373',
@@ -63,7 +63,7 @@
     },
     candy: {
       label: 'Candy',
-      wedges: ['#ff8fab', '#8ecae6', '#ffd670', '#b5e48c', '#cdb4db', '#ffafcc'],
+      wedges: ['#ff8fab', '#8ecae6', '#ffafcc', '#b5e48c', '#cdb4db', '#ffd670'],
       bg: 'radial-gradient(ellipse at 50% 0%, #fdf0f5 0%, #e8f3fb 60%, #eae4f7 100%)',
       accent: '#d1467a',
       rim: '#ffffff',
@@ -316,10 +316,50 @@
     return 0.2126 * chan[0] + 0.7152 * chan[1] + 0.0722 * chan[2];
   }
 
-  /* Label colour chosen per wedge by luminance, so text clears contrast on
-   * every palette rather than assuming one fixed ink colour works. */
+  var INK_DARK = '#161016';
+  var INK_LIGHT = '#ffffff';
+
+  function contrastRatio(a, b) {
+    var first = relativeLuminance(a);
+    var second = relativeLuminance(b);
+    var lighter = Math.max(first, second);
+    var darker = Math.min(first, second);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  /* Label colour chosen per wedge by measured contrast, not by a luminance
+   * threshold: the black/white crossover sits near 0.179, and guessing it
+   * puts mid-tone wedges — oranges, corals, mid greens — below 4.5:1 with
+   * white text. tests.html holds every palette to that ratio. */
   function inkFor(hex) {
-    return relativeLuminance(hex) > 0.42 ? '#161016' : '#ffffff';
+    return contrastRatio(hex, INK_DARK) >= contrastRatio(hex, INK_LIGHT) ? INK_DARK : INK_LIGHT;
+  }
+
+  /* How different two colours look, by the "redmean" approximation. Used to
+   * keep neighbouring wedges apart: a palette's order matters because the
+   * wheel wraps, so its first and last colours are neighbours too. */
+  function colourDistance(a, b) {
+    var first = hexToRgb(a), second = hexToRgb(b);
+    var meanRed = (first.r + second.r) / 2;
+    var dr = first.r - second.r, dg = first.g - second.g, db = first.b - second.b;
+    return Math.sqrt(
+      (2 + meanRed / 256) * dr * dr +
+      4 * dg * dg +
+      (2 + (255 - meanRed) / 256) * db * db
+    );
+  }
+
+  /* Spread the palette across the roster instead of cycling through it, so a
+   * three-person wheel does not land on three neighbouring hues. */
+  function paletteIndex(position, rosterSize, paletteLength) {
+    if (paletteLength < 1 || rosterSize < 1) return 0;
+    if (rosterSize <= paletteLength) {
+      return Math.round(position * paletteLength / rosterSize) % paletteLength;
+    }
+    var index = position % paletteLength;
+    /* The wheel wraps, so the last wedge must not repeat the first's colour. */
+    if (position === rosterSize - 1 && index === 0) index = Math.floor(paletteLength / 2);
+    return index;
   }
 
   function mixHex(hex, towards, amount) {
@@ -364,6 +404,9 @@
     formatClock: formatClock,
     formatRemaining: formatRemaining,
     inkFor: inkFor,
+    contrastRatio: contrastRatio,
+    paletteIndex: paletteIndex,
+    colourDistance: colourDistance,
     relativeLuminance: relativeLuminance,
     shade: shade,
     drained: drained,
@@ -804,6 +847,121 @@
   global.SpinnerWheel.prefersReducedMotion = prefersReducedMotion;
 })(typeof window !== 'undefined' ? window : globalThis);
 
+/* ===================================================================== SOUND
+ * Synthesized in the browser: no asset files, no licensing, nothing to load.
+ * The context is created on the first gesture, because browsers will not let
+ * audio start any earlier.
+ */
+(function (global) {
+  'use strict';
+  var STORAGE_KEY = 'spinner:muted';
+
+  function Sound() {
+    this.ctx = null;
+    this.muted = readMuted();
+  }
+
+  /* Browser storage is per-viewer and can throw outright in a private window,
+     so it is only ever used for a convenience like this one. */
+  function readMuted() {
+    try {
+      return global.localStorage.getItem(STORAGE_KEY) === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function writeMuted(muted) {
+    try {
+      global.localStorage.setItem(STORAGE_KEY, muted ? '1' : '0');
+    } catch (e) { /* nothing to do: the session simply will not remember */ }
+  }
+
+  Sound.prototype.setMuted = function (muted) {
+    this.muted = muted;
+    writeMuted(muted);
+  };
+
+  /* Call from a click handler: without a gesture the context stays suspended. */
+  Sound.prototype.unlock = function () {
+    var Ctor = global.AudioContext || global.webkitAudioContext;
+    if (!Ctor) return;
+    if (!this.ctx) {
+      try { this.ctx = new Ctor(); } catch (e) { this.ctx = null; return; }
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+  };
+
+  Sound.prototype.tone = function (options) {
+    if (this.muted || !this.ctx) return;
+    var ctx = this.ctx;
+    var now = ctx.currentTime + (options.delay || 0);
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+
+    osc.type = options.type || 'sine';
+    osc.frequency.setValueAtTime(options.freq, now);
+    if (options.sweepTo) {
+      osc.frequency.exponentialRampToValueAtTime(options.sweepTo, now + options.duration);
+    }
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(options.volume, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + options.duration);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + options.duration + 0.02);
+  };
+
+  /* One per wedge boundary. The pitch wanders slightly so a fast wheel
+   * sounds like a ratchet rather than a machine gun. */
+  Sound.prototype.tick = function (remaining) {
+    this.tone({
+      type: 'square',
+      freq: 1500 + Math.random() * 500 - remaining * 300,
+      duration: 0.035,
+      volume: 0.055
+    });
+  };
+
+  Sound.prototype.land = function () {
+    var notes = [523.25, 659.25, 783.99];
+    for (var i = 0; i < notes.length; i++) {
+      this.tone({ type: 'triangle', freq: notes[i], duration: 0.42, volume: 0.13, delay: i * 0.055 });
+    }
+  };
+
+  Sound.prototype.sting = function () {
+    var notes = [440, 554.37, 659.25];
+    for (var i = 0; i < notes.length; i++) {
+      this.tone({ type: 'triangle', freq: notes[i], duration: 0.16, volume: 0.1, delay: i * 0.075 });
+    }
+  };
+
+  /* The fifteen-second warning is the one that does the work: it is the cue
+   * to wrap up, where the buzzer only announces a failure already made. */
+  Sound.prototype.warn = function () {
+    this.tone({ type: 'sine', freq: 880, duration: 0.16, volume: 0.1 });
+    this.tone({ type: 'sine', freq: 880, duration: 0.16, volume: 0.1, delay: 0.22 });
+  };
+
+  Sound.prototype.buzz = function () {
+    this.tone({ type: 'sawtooth', freq: 165, duration: 0.5, volume: 0.1 });
+    this.tone({ type: 'sawtooth', freq: 155, duration: 0.5, volume: 0.1 });
+  };
+
+  Sound.prototype.finish = function () {
+    var notes = [523.25, 659.25, 783.99, 1046.5];
+    for (var i = 0; i < notes.length; i++) {
+      this.tone({ type: 'triangle', freq: notes[i], duration: 0.5, volume: 0.11, delay: i * 0.1 });
+    }
+  };
+
+  global.SpinnerSound = Sound;
+})(typeof window !== 'undefined' ? window : globalThis);
+
 /* ==================================================================== BOOT
  * Only runs when the app page is present; tests.html loads this file without
  * an #app element and gets the logic alone.
@@ -850,7 +1008,12 @@
     awayStrip: doc.getElementById('awayStrip'),
     toast: doc.getElementById('toast'),
     toastText: doc.getElementById('toastText'),
-    toastUndo: doc.getElementById('toastUndo')
+    toastUndo: doc.getElementById('toastUndo'),
+    themes: doc.getElementById('themes'),
+    background: doc.getElementById('background'),
+    backgroundHint: doc.getElementById('backgroundHint'),
+    muteToggle: doc.getElementById('muteToggle'),
+    muteGlyph: doc.getElementById('muteGlyph')
   };
 
   var state = {
@@ -868,6 +1031,7 @@
   };
 
   var wheel = new global.SpinnerWheel(els.canvas);
+  var sound = new global.SpinnerSound();
 
   /* The hub is a DOM button sitting over the canvas, so it has to track the
      circle the canvas actually drew rather than the element's own box. */
@@ -929,6 +1093,8 @@
 
   function startTimer() {
     if (timer.running) return;
+    sound.unlock();
+    sound.sting();
     timer.running = true;
     timer.everStarted = true;
     timer.since = Date.now();
@@ -984,8 +1150,8 @@
   var MILESTONES = [
     { at: 60, say: 'One minute left.' },
     { at: 30, say: 'Thirty seconds left.' },
-    { at: 15, say: 'Fifteen seconds left.' },
-    { at: 0, say: "Time's up." }
+    { at: 15, say: 'Fifteen seconds left.', play: 'warn' },
+    { at: 0, say: "Time's up.", play: 'buzz' }
   ];
 
   function announceTime(remaining) {
@@ -996,6 +1162,7 @@
       if (milestone.at > 0 && state.board.turnSeconds <= milestone.at) return;
       timer.announcedAt[milestone.at] = true;
       announce(milestone.say);
+      if (milestone.play) sound[milestone.play]();
     });
   }
 
@@ -1013,7 +1180,11 @@
         spoken: name === state.speaker,
         /* Colour follows the participant for the whole standup, so the wheel
            does not repaint itself every time someone leaves it. */
-        colorIndex: state.board.participants.indexOf(name)
+        colorIndex: S.paletteIndex(
+          state.board.participants.indexOf(name),
+          state.board.participants.length,
+          S.theme(state.board.theme).wedges.length
+        )
       };
     });
   }
@@ -1202,7 +1373,78 @@
     }
   }
 
+  function renderThemes() {
+    if (els.themes.childElementCount) {
+      updateThemeSelection();
+      return;
+    }
+    S.themeNames().forEach(function (name) {
+      var palette = S.theme(name);
+      var button = doc.createElement('button');
+      button.type = 'button';
+      button.className = 'theme-swatch';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('data-theme', name);
+
+      var dots = doc.createElement('span');
+      dots.className = 'swatch-dots';
+      palette.wedges.slice(0, 4).forEach(function (colour) {
+        var dot = doc.createElement('i');
+        dot.style.background = colour;
+        dots.appendChild(dot);
+      });
+
+      var label = doc.createElement('span');
+      label.textContent = palette.label;
+
+      button.appendChild(dots);
+      button.appendChild(label);
+      button.addEventListener('click', function () { setTheme(name); });
+      els.themes.appendChild(button);
+    });
+    updateThemeSelection();
+  }
+
+  function updateThemeSelection() {
+    var swatches = els.themes.querySelectorAll('.theme-swatch');
+    for (var i = 0; i < swatches.length; i++) {
+      var isCurrent = swatches[i].getAttribute('data-theme') === state.board.theme;
+      swatches[i].setAttribute('aria-checked', isCurrent ? 'true' : 'false');
+      swatches[i].tabIndex = isCurrent ? 0 : -1;
+    }
+  }
+
+  function setTheme(name) {
+    state.board.theme = name;
+    syncUrl();
+    applyTheme();
+    updateThemeSelection();
+    /* Wedge colours are drawn from the palette, so the wheel is rebuilt. */
+    rebuildWheel();
+    render();
+  }
+
+  function applyBackground(value) {
+    var trimmed = String(value || '').trim();
+    var safe = S.safeImageUrl(trimmed);
+    var invalid = trimmed.length > 0 && !safe;
+
+    els.background.classList.toggle('invalid', invalid);
+    els.backgroundHint.textContent = invalid
+      ? 'Needs to be a full http:// or https:// image address.'
+      : 'Optional. Anything the wheel sits on gets dimmed so names stay readable.';
+
+    if (invalid) return;
+    state.board.background = safe;
+    syncUrl();
+    applyTheme();
+  }
+
   function renderSetup() {
+    renderThemes();
+    if (doc.activeElement !== els.background) {
+      els.background.value = state.board.background;
+    }
     if (doc.activeElement !== els.roster) {
       els.roster.value = state.board.participants.join('\n');
     }
@@ -1281,6 +1523,7 @@
 
   function advance() {
     if (state.busy) return;
+    sound.unlock();
 
     /* Whatever just happened on screen, the turn that was running is over. */
     recordTurn();
@@ -1302,7 +1545,10 @@
       var winner = S.pickWinner(pool);
       var index = wheel.wedges.map(function (w) { return w.name; }).indexOf(winner);
       if (index === -1) { state.busy = false; render(); return; }
-      wheel.spin(index, { onDone: function () { land(winner); } });
+      wheel.spin(index, {
+        onTick: function (remaining) { sound.tick(remaining); },
+        onDone: function () { land(winner); }
+      });
     });
   }
 
@@ -1315,10 +1561,12 @@
     wheel.draw();
     if (state.pendingRebuild) rebuildWheel();
     render();
+    sound.land();
     announce(winner + ' is up. ' + S.formatClock(state.board.turnSeconds) + ' on the clock.');
   }
 
   function finishRound() {
+    sound.finish();
     state.phase = 'complete';
     state.speaker = null;
     render();
@@ -1384,8 +1632,35 @@
     }
   }
 
+  function renderMuteButton() {
+    els.muteToggle.setAttribute('aria-pressed', sound.muted ? 'true' : 'false');
+    els.muteToggle.setAttribute('aria-label', sound.muted ? 'Unmute sound' : 'Mute sound');
+    els.muteToggle.title = sound.muted ? 'Unmute sound' : 'Mute sound';
+    /* Struck through with CSS rather than a combining character, which
+       renders unpredictably across platforms. */
+  }
+
   /* ----------------------------------------------------------------- wire */
   els.spinBtn.addEventListener('click', advance);
+
+  els.muteToggle.addEventListener('click', function () {
+    sound.setMuted(!sound.muted);
+    renderMuteButton();
+    if (!sound.muted) { sound.unlock(); sound.tick(0.5); }
+  });
+
+  els.themes.addEventListener('keydown', function (event) {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    var names = S.themeNames();
+    var at = names.indexOf(state.board.theme);
+    var next = event.key === 'ArrowRight' ? at + 1 : at - 1;
+    next = (next + names.length) % names.length;
+    event.preventDefault();
+    setTheme(names[next]);
+    els.themes.querySelector('[aria-checked="true"]').focus();
+  });
+
+  els.background.addEventListener('input', function () { applyBackground(els.background.value); });
   els.timerToggle.addEventListener('click', function () {
     timer.running ? pauseTimer() : startTimer();
   });
@@ -1451,6 +1726,7 @@
   wheel.resize();
   resetTimer();
   renderSetup();
+  renderMuteButton();
   render();
 
   /* First visit: nothing to spin, so the panel is the screen. */

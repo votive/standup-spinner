@@ -245,6 +245,64 @@
     eq(S.solveRotation(2.5, 0, 0, 4), 2.5);
   });
 
+  /* ------------------------------------------------------------- appearance */
+  suite('Appearance');
+
+  test('every theme keeps its labels above 4.5:1', function () {
+    S.themeNames().forEach(function (name) {
+      S.theme(name).wedges.forEach(function (wedge) {
+        var ratio = S.contrastRatio(wedge, S.inkFor(wedge));
+        ok(ratio >= 4.5, name + ' wedge ' + wedge + ' is only ' + ratio.toFixed(2) + ':1');
+      });
+    });
+  });
+
+  test('ink is picked by measured contrast, not a guessed threshold', function () {
+    eq(S.inkFor('#ffffff'), '#161016');
+    eq(S.inkFor('#000000'), '#ffffff');
+    /* A mid-tone orange: white text on this is only 2.6:1. */
+    eq(S.inkFor('#e08d0b'), '#161016');
+  });
+
+  test('a small roster is spread across the palette, not bunched', function () {
+    eq(S.paletteIndex(0, 3, 6), 0);
+    eq(S.paletteIndex(1, 3, 6), 2);
+    eq(S.paletteIndex(2, 3, 6), 4);
+  });
+
+  test('no two neighbours on the wheel share a colour', function () {
+    for (var size = 1; size <= 30; size++) {
+      var colours = [];
+      for (var i = 0; i < size; i++) colours.push(S.paletteIndex(i, size, 6));
+      for (var j = 0; j < size; j++) {
+        var next = colours[(j + 1) % size];
+        if (size === 1) continue;
+        ok(colours[j] !== next,
+           'size ' + size + ': wedge ' + j + ' and ' + ((j + 1) % size) + ' are both ' + colours[j]);
+      }
+    }
+  });
+
+  test('neighbouring wedges are never near-identical colours', function () {
+    /* The wheel wraps, so a palette's first and last entries are neighbours.
+       Mono is deliberately low-contrast between wedges; everything else has
+       considerably more room than this floor. */
+    S.themeNames().forEach(function (name) {
+      var wedges = S.theme(name).wedges;
+      for (var i = 0; i < wedges.length; i++) {
+        var next = wedges[(i + 1) % wedges.length];
+        var apart = S.colourDistance(wedges[i], next);
+        ok(apart >= 90, name + ': ' + wedges[i] + ' and ' + next +
+           ' are only ' + apart.toFixed(0) + ' apart');
+      }
+    });
+  });
+
+  test('a degenerate palette or roster does not throw', function () {
+    eq(S.paletteIndex(0, 0, 6), 0);
+    eq(S.paletteIndex(3, 4, 0), 0);
+  });
+
   /* ------------------------------------------------------------------ clock */
   suite('Clock formatting');
 

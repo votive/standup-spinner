@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Standup Spinner</title>
 <meta name="description" content="Spin the wheel to pick who speaks next at standup.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Cpath%20d%3D%22M16%2016L31.00%2016.00A15%2015%200%200%201%2023.50%2028.99Z%22%20fill%3D%22%23c1121f%22%2F%3E%3Cpath%20d%3D%22M16%2016L23.50%2028.99A15%2015%200%200%201%208.50%2028.99Z%22%20fill%3D%22%23f2b705%22%2F%3E%3Cpath%20d%3D%22M16%2016L8.50%2028.99A15%2015%200%200%201%201.00%2016.00Z%22%20fill%3D%22%238c0f1a%22%2F%3E%3Cpath%20d%3D%22M16%2016L1.00%2016.00A15%2015%200%200%201%208.50%203.01Z%22%20fill%3D%22%23e08d0b%22%2F%3E%3Cpath%20d%3D%22M16%2016L8.50%203.01A15%2015%200%200%201%2023.50%203.01Z%22%20fill%3D%22%23a50e1f%22%2F%3E%3Cpath%20d%3D%22M16%2016L23.50%203.01A15%2015%200%200%201%2031.00%2016.00Z%22%20fill%3D%22%23ffd447%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2215%22%20fill%3D%22none%22%20stroke%3D%22%23f2b705%22%20stroke-width%3D%222%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%224.6%22%20fill%3D%22%23ffd447%22%20stroke%3D%22%235e4500%22%20stroke-width%3D%221%22%2F%3E%3C%2Fsvg%3E">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -17,13 +18,17 @@
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">Standup Spinner</span>
     </div>
-    <button type="button" class="btn btn-ghost" id="setupToggle" aria-expanded="false" aria-controls="setup">Setup</button>
+    <div class="topbar-actions">
+      <button type="button" class="icon-btn" id="muteToggle" aria-pressed="false"
+              aria-label="Mute sound" title="Mute sound"><span id="muteGlyph" aria-hidden="true">♪</span></button>
+      <button type="button" class="btn btn-ghost" id="setupToggle" aria-expanded="false" aria-controls="setup">Setup</button>
+    </div>
   </header>
 
   <main class="stage" id="stage">
     <div class="wheel-area">
       <div class="wheel-wrap">
-        <canvas id="wheel"></canvas>
+        <canvas id="wheel" aria-hidden="true"></canvas>
         <button id="spinBtn" class="hub" type="button">
           <span class="hub-label">Spin</span>
         </button>
@@ -82,6 +87,17 @@
       <p class="field-label">Here today</p>
       <div class="presence" id="presence"></div>
       <p class="hint">Unticking someone takes them off the wheel for this standup only. It never changes the board link.</p>
+    </div>
+
+    <div class="field">
+      <p class="field-label" id="themeLabel">Theme</p>
+      <div class="themes" id="themes" role="radiogroup" aria-labelledby="themeLabel"></div>
+    </div>
+
+    <div class="field">
+      <label for="background">Background image</label>
+      <input type="url" id="background" placeholder="https://…" spellcheck="false" autocomplete="off">
+      <p class="hint" id="backgroundHint">Optional. Anything the wheel sits on gets dimmed so names stay readable.</p>
     </div>
 
     <div class="field">
