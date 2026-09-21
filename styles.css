@@ -570,6 +570,14 @@ input[type="number"] {
 
 .setup-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
+.btn-quiet {
+  border-color: rgba(255, 90, 82, .45);
+  color: #ffb4af;
+  background: rgba(255, 90, 82, .1);
+}
+
+.btn-quiet:hover { background: rgba(255, 90, 82, .2); }
+
 /* Away participants leave the wheel entirely and are listed under it: being
    away is a fact about today, settled before the first spin. */
 .away-strip {

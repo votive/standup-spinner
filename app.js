@@ -1109,7 +1109,9 @@
     background: doc.getElementById('background'),
     backgroundHint: doc.getElementById('backgroundHint'),
     muteToggle: doc.getElementById('muteToggle'),
-    muteGlyph: doc.getElementById('muteGlyph')
+    muteGlyph: doc.getElementById('muteGlyph'),
+    startAgain: doc.getElementById('startAgain'),
+    startAgainHint: doc.getElementById('startAgainHint')
   };
 
   var state = {
@@ -1319,6 +1321,10 @@
 
     renderAwayStrip();
 
+    var hasProgress = state.spoken.length > 0 || state.turns.length > 0 || !!state.speaker;
+    els.startAgain.hidden = !hasProgress;
+    els.startAgainHint.hidden = !hasProgress;
+
     if (state.phase === 'speaking') {
       els.speakerName.textContent = state.speaker;
       renderPrompts();
@@ -1387,7 +1393,16 @@
   function restoreSession() {
     var saved = loadSession();
     if (!saved) return;
+    applySession(saved);
 
+    if (state.phase === 'speaking' && state.speaker &&
+        state.board.participants.indexOf(state.speaker) === -1) {
+      state.phase = 'idle';
+      state.speaker = null;
+    }
+  }
+
+  function applySession(saved) {
     state.spoken = saved.spoken;
     state.away = saved.away;
     state.speaker = saved.speaker;
@@ -1402,14 +1417,10 @@
 
     /* A clock that was running when the tab closed keeps running: it is
        driven by timestamps, so it has been counting the whole time. */
+    global.clearInterval(timer.handle);
+    timer.handle = null;
     if (timer.running) {
       timer.handle = global.setInterval(tickTimer, 200);
-    }
-
-    if (state.phase === 'speaking' && state.speaker &&
-        state.board.participants.indexOf(state.speaker) === -1) {
-      state.phase = 'idle';
-      state.speaker = null;
     }
   }
 
@@ -1768,7 +1779,15 @@
     });
   }
 
-  function newRound() {
+  /* Restarting is a decision, so it gets a button rather than being a side
+   * effect of refreshing. Who is away today is not touched: a restart is
+   * still the same day. */
+  function startAgain() {
+    if (state.busy) return;
+
+    var previous = S.packSession(state);
+    var hadProgress = state.spoken.length > 0 || state.turns.length > 0 || !!state.speaker;
+
     hideToast();
     state.spoken = [];
     state.turns = [];
@@ -1779,6 +1798,21 @@
     clearSession();
     wheel.setWedges(wedgesFromState());
     render();
+
+    if (!hadProgress) {
+      els.spinBtn.focus();
+      return;
+    }
+
+    announce('Round restarted. Everyone is back on the wheel.');
+    showToast('Round restarted', function () {
+      applySession(S.unpackSession(JSON.stringify(previous)));
+      wheel.setWedges(wedgesFromState());
+      render();
+      if (state.phase === 'complete') renderEndCard();
+      saveSession();
+      announce('Restart undone.');
+    });
     els.spinBtn.focus();
   }
 
@@ -1834,7 +1868,7 @@
     resetTimer();
     saveSession();
   });
-  els.newRound.addEventListener('click', newRound);
+  els.newRound.addEventListener('click', startAgain);
   els.copyLink.addEventListener('click', function () { copyBoardLink(els.copyLink); });
   els.copyLinkSetup.addEventListener('click', function () { copyBoardLink(els.copyLinkSetup); });
 
@@ -1842,6 +1876,10 @@
     state.setupOpen ? closeSetup() : openSetup();
   });
   els.setupClose.addEventListener('click', closeSetup);
+  els.startAgain.addEventListener('click', function () {
+    startAgain();
+    closeSetup();
+  });
   els.setupScrim.addEventListener('click', closeSetup);
 
   els.roster.addEventListener('input', function () { applyRoster(els.roster.value); });

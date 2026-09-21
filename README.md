@@ -12,7 +12,9 @@ No accounts, no server, nothing to install.
 
 **Away is just for today.** Unticking someone in Setup — or clicking their wedge — takes them off the wheel for this standup only. It never changes the link. Tomorrow everyone is back.
 
-**Refreshing is safe; closing the tab isn't.** Reload mid-standup and you get everything back, including a clock that carried on running while the page reloaded. Close the tab and the round starts fresh. That's deliberate: the link is your team, the tab is today.
+**Refreshing is safe; closing the tab isn't.** Reload mid-standup and you get everything back, including a clock that carried on running while the page reloaded. Close the tab and the round starts fresh. That's deliberate — an accidental refresh four people in shouldn't put two of them back in the hat.
+
+To start over on purpose, there's **Start again** in Setup. It puts everyone back on the wheel and clears the clock, and you get a few seconds to undo it if you didn't mean it. Who's away today stays away, because a restart is still the same day.
 
 ## Driving it
 
@@ -22,6 +24,8 @@ No accounts, no server, nothing to install.
 | **S** | Start or pause the clock |
 | **Esc** | Open and close Setup |
 | Click a wedge | Mark that person away today (with an undo) |
+
+Mid-standup, **Setup → Start again** puts everyone back on the wheel.
 
 The clock doesn't cut anyone off. At zero it turns red and starts counting *up*, so a turn that ran to 2:47 says so — in front of everyone — without anybody having to be the person who interrupts.
 
