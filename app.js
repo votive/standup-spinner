@@ -888,7 +888,8 @@
   }
 
   /* The winner is already decided; this only animates the journey to them
-   * (ADR 0003). onTick fires each time a wedge boundary passes the pointer. */
+   * (ADR 0003). Wedge boundaries are still tracked, but only to flick the
+   * marker: a click per wedge was too much noise over a shared screen. */
   Wheel.prototype.spin = function (winnerIndex, opts) {
     var self = this;
     opts = opts || {};
@@ -924,7 +925,6 @@
       if (wedge !== lastWedge) {
         lastWedge = wedge;
         self.pointerKick = 0.42;
-        if (opts.onTick) opts.onTick(1 - t);
       }
       self.pointerKick *= 0.82;
 
@@ -1011,15 +1011,9 @@
     osc.stop(now + options.duration + 0.02);
   };
 
-  /* One per wedge boundary. The pitch wanders slightly so a fast wheel
-   * sounds like a ratchet rather than a machine gun. */
-  Sound.prototype.tick = function (remaining) {
-    this.tone({
-      type: 'square',
-      freq: 1500 + Math.random() * 500 - remaining * 300,
-      duration: 0.035,
-      volume: 0.055
-    });
+  /* A short confirmation when sound is switched back on. */
+  Sound.prototype.blip = function () {
+    this.tone({ type: 'triangle', freq: 659.25, duration: 0.14, volume: 0.09 });
   };
 
   Sound.prototype.land = function () {
@@ -1719,10 +1713,7 @@
       var winner = S.pickWinner(pool);
       var index = wheel.wedges.map(function (w) { return w.name; }).indexOf(winner);
       if (index === -1) { state.busy = false; render(); return; }
-      wheel.spin(index, {
-        onTick: function (remaining) { sound.tick(remaining); },
-        onDone: function () { land(winner); }
-      });
+      wheel.spin(index, { onDone: function () { land(winner); } });
     });
   }
 
@@ -1846,7 +1837,7 @@
   els.muteToggle.addEventListener('click', function () {
     sound.setMuted(!sound.muted);
     renderMuteButton();
-    if (!sound.muted) { sound.unlock(); sound.tick(0.5); }
+    if (!sound.muted) { sound.unlock(); sound.blip(); }
   });
 
   els.themes.addEventListener('keydown', function (event) {
