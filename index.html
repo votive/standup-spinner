@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Standup Spinner</title>
+<meta name="description" content="Spin the wheel to pick who speaks next at standup.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <div class="bg-image" id="bgImage"></div>
+  <div class="bg-scrim"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Standup Spinner</span>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <div class="wheel-area">
+      <div class="wheel-wrap">
+        <canvas id="wheel"></canvas>
+        <button id="spinBtn" class="hub" type="button">
+          <span class="hub-label">Spin</span>
+        </button>
+      </div>
+      <p class="wheel-caption" id="caption"></p>
+    </div>
+  </main>
+
+  <div class="sr-only" id="announcer" aria-live="polite" role="status"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

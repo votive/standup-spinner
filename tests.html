@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Standup Spinner — tests</title>
+<style>
+  body { font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #0d0f14; color: #d7dce5; margin: 0; padding: 32px; }
+  h1 { font-size: 18px; margin: 0 0 4px; color: #fff; }
+  .sub { color: #7d879c; margin-bottom: 24px; }
+  h2 { font-size: 14px; margin: 28px 0 8px; color: #8ecae6; text-transform: uppercase; letter-spacing: .08em; }
+  .case { padding: 3px 0 3px 22px; position: relative; }
+  .case::before { position: absolute; left: 0; }
+  .pass::before { content: "PASS"; color: #4ade80; font-size: 11px; top: 5px; }
+  .fail::before { content: "FAIL"; color: #f87171; font-size: 11px; top: 5px; }
+  .pass { color: #9aa4b8; }
+  .fail { color: #fca5a5; }
+  .detail { color: #f87171; padding-left: 22px; font-size: 13px; }
+  #summary { margin-top: 32px; padding: 14px 18px; border-radius: 8px; font-size: 16px; }
+  .ok { background: #04331d; color: #86efac; }
+  .bad { background: #3b0d0d; color: #fca5a5; }
+</style>
+</head>
+<body>
+<h1>Standup Spinner — logic tests</h1>
+<div class="sub">No runner, no npm. Open this file to run it. See docs/adr/0008.</div>
+<div id="out"></div>
+<div id="summary"></div>
+
+<script src="app.js"></script>
+<script>
+(function () {
+  var S = window.Spinner;
+  var out = document.getElementById('out');
+  var passed = 0, failed = 0;
+
+  function suite(name) {
+    var h = document.createElement('h2');
+    h.textContent = name;
+    out.appendChild(h);
+  }
+
+  function test(name, fn) {
+    var row = document.createElement('div');
+    try {
+      fn();
+      row.className = 'case pass';
+      row.textContent = name;
+      passed++;
+    } catch (err) {
+      row.className = 'case fail';
+      row.textContent = name;
+      var detail = document.createElement('div');
+      detail.className = 'detail';
+      detail.textContent = err.message;
+      out.appendChild(row);
+      out.appendChild(detail);
+      failed++;
+      return;
+    }
+    out.appendChild(row);
+  }
+
+  function eq(actual, expected, note) {
+    var a = JSON.stringify(actual), b = JSON.stringify(expected);
+    if (a !== b) throw new Error((note ? note + ': ' : '') + 'expected ' + b + ', got ' + a);
+  }
+
+  function ok(value, note) {
+    if (!value) throw new Error(note || 'expected truthy, got ' + JSON.stringify(value));
+  }
+
+  /* ---------------------------------------------------- the Board URL codec */
+  suite('Board URL codec');
+
+  test('reads a plain roster', function () {
+    eq(S.parseBoard('?p=Ayesha,Tom,Jo').participants, ['Ayesha', 'Tom', 'Jo']);
+  });
+
+  test('round-trips unicode, spaces and punctuation', function () {
+    var names = ['Zoë', 'Tom B.', '李雷', 'Ana-María', 'Jo 🎉'];
+    var qs = S.serializeBoard({ participants: names });
+    eq(S.parseBoard(qs).participants, names);
+  });
+
+  test('round-trips a name containing a comma', function () {
+    var names = ['Smith, John', 'Jo'];
+    eq(S.parseBoard(S.serializeBoard({ participants: names })).participants, names);
+  });
+
+  test('round-trips an ampersand and an equals sign', function () {
+    var names = ['Tom & Jerry', 'a=b'];
+    eq(S.parseBoard(S.serializeBoard({ participants: names })).participants, names);
+  });
+
+  test('defaults turn length to 120', function () {
+    eq(S.parseBoard('?p=Jo').turnSeconds, 120);
+  });
+
+  test('clamps an absurd turn length instead of erroring', function () {
+    eq(S.parseBoard('?p=Jo&t=99999').turnSeconds, 3600);
+    eq(S.parseBoard('?p=Jo&t=2').turnSeconds, 15);
+  });
+
+  test('falls back to the default on a malformed turn length', function () {
+    eq(S.parseBoard('?p=Jo&t=banana').turnSeconds, 120);
+  });
+
+  test('falls back to the default on an unknown theme', function () {
+    eq(S.parseBoard('?p=Jo&theme=chartreuse').theme, 'showtime');
+  });
+
+  test('ignores unknown params rather than choking', function () {
+    eq(S.parseBoard('?p=Jo&somethingNew=1&v=7').participants, ['Jo']);
+  });
+
+  test('rejects a non-http background URL', function () {
+    eq(S.parseBoard('?p=Jo&bg=javascript%3Aalert(1)').background, '');
+    eq(S.parseBoard('?p=Jo&bg=' + encodeURIComponent('https://x.test/a.png')).background,
+       'https://x.test/a.png');
+  });
+
+  test('handles an empty roster param', function () {
+    eq(S.parseBoard('?p=').participants, []);
+    eq(S.parseBoard('').participants, []);
+  });
+
+  test('drops blank entries from a trailing comma', function () {
+    eq(S.parseBoard('?p=Jo,,Tom,').participants, ['Jo', 'Tom']);
+  });
+
+  test('caps the roster at 30 and names at 40 characters', function () {
+    var many = [];
+    for (var i = 0; i < 40; i++) many.push('P' + i);
+    eq(S.parseBoard(S.serializeBoard({ participants: many })).participants.length, 30);
+    var long = new Array(80).join('x');
+    eq(S.parseBoard(S.serializeBoard({ participants: [long] })).participants[0].length, 40);
+  });
+
+  test('reads custom prompts and prompts=off', function () {
+    eq(S.parseBoard('?p=Jo&prompts=off').prompts, []);
+    eq(S.parseBoard(S.serializeBoard({ participants: ['Jo'], prompts: ['Done', 'Next'] })).prompts,
+       ['Done', 'Next']);
+  });
+
+  test('omits defaults from the serialized URL', function () {
+    eq(S.serializeBoard({ participants: ['Jo'], turnSeconds: 120, theme: 'showtime',
+                          prompts: S.DEFAULT_PROMPTS }), '?p=Jo');
+  });
+
+  test('parses a roster pasted as lines of text', function () {
+    eq(S.parseRosterText('  Ayesha \n\nTom B.\n  \nJo\n'), ['Ayesha', 'Tom B.', 'Jo']);
+  });
+
+  /* ------------------------------------------------------------ eligibility */
+  suite('Eligibility');
+
+  test('everyone is eligible at the start', function () {
+    eq(S.eligible(['A', 'B', 'C'], [], []), ['A', 'B', 'C']);
+  });
+
+  test('excludes those who have spoken', function () {
+    eq(S.eligible(['A', 'B', 'C'], ['B'], []), ['A', 'C']);
+  });
+
+  test('excludes those who are away', function () {
+    eq(S.eligible(['A', 'B', 'C'], [], ['C']), ['A', 'B']);
+  });
+
+  test('handles someone both spoken and away', function () {
+    eq(S.eligible(['A', 'B'], ['A'], ['A']), ['B']);
+  });
+
+  test('is empty when everyone has spoken', function () {
+    eq(S.eligible(['A', 'B'], ['A', 'B'], []), []);
+  });
+
+  test('ignores stale names left over from a roster edit', function () {
+    eq(S.eligible(['A', 'B'], ['Removed'], ['AlsoGone']), ['A', 'B']);
+  });
+
+  test('is not confused by a name matching an Object prototype key', function () {
+    eq(S.eligible(['constructor', 'toString', 'A'], ['toString'], []), ['constructor', 'A']);
+  });
+
+  test('names the degenerate states', function () {
+    eq(S.rosterState([], [], []), 'setup');
+    eq(S.rosterState(['A', 'B'], [], ['A', 'B']), 'all-away');
+    eq(S.rosterState(['A', 'B'], ['A'], []), 'ready');
+    eq(S.rosterState(['A', 'B'], ['A'], ['B']), 'complete');
+    eq(S.rosterState(['A'], [], []), 'ready');
+  });
+
+  test('flags duplicate names, case-insensitively', function () {
+    eq(S.findDuplicates(['Tom', 'Jo', 'tom']), ['tom']);
+    eq(S.findDuplicates(['Tom', 'Jo']), []);
+  });
+
+  test('picks a winner only from the eligible set', function () {
+    var pool = ['A', 'B', 'C'];
+    for (var i = 0; i < 200; i++) ok(pool.indexOf(S.pickWinner(pool)) !== -1);
+    eq(S.pickWinner([]), null);
+  });
+
+  test('picking is uniform, not biased to an end', function () {
+    eq(S.pickWinner(['A', 'B', 'C'], function () { return 0; }), 'A');
+    eq(S.pickWinner(['A', 'B', 'C'], function () { return 0.999999; }), 'C');
+    eq(S.pickWinner(['A', 'B', 'C'], function () { return 0.5; }), 'B');
+  });
+
+  /* --------------------------------------------------------- rotation solver */
+  suite('Rotation solver');
+
+  test('lands dead centre on the winning wedge, from any start angle', function () {
+    for (var count = 1; count <= 30; count++) {
+      for (var idx = 0; idx < count; idx++) {
+        for (var s = 0; s < 12; s++) {
+          var start = (s / 12) * S.TAU * 3.7;
+          var end = S.solveRotation(start, idx, count, 5);
+          eq(S.wedgeAtPointer(end, count), idx,
+             'count=' + count + ' idx=' + idx + ' start=' + start.toFixed(2));
+        }
+      }
+    }
+  });
+
+  test('always rotates forwards, never backwards', function () {
+    for (var i = 0; i < 50; i++) {
+      var start = Math.random() * 100;
+      ok(S.solveRotation(start, i % 8, 8, 4) > start);
+    }
+  });
+
+  test('turns at least the requested number of full rotations', function () {
+    var end = S.solveRotation(0, 3, 7, 5);
+    ok(end >= 5 * S.TAU, 'expected at least 5 turns, got ' + (end / S.TAU).toFixed(2));
+    ok(end < 6 * S.TAU, 'expected under 6 turns, got ' + (end / S.TAU).toFixed(2));
+  });
+
+  test('a single-wedge wheel still lands on wedge 0', function () {
+    eq(S.wedgeAtPointer(S.solveRotation(1.234, 0, 1, 3), 1), 0);
+  });
+
+  test('an empty wheel does not move', function () {
+    eq(S.solveRotation(2.5, 0, 0, 4), 2.5);
+  });
+
+  /* ------------------------------------------------------------------ clock */
+  suite('Clock formatting');
+
+  test('formats a countdown', function () {
+    eq(S.formatRemaining(120), '2:00');
+    eq(S.formatRemaining(65), '1:05');
+    eq(S.formatRemaining(9), '0:09');
+    eq(S.formatRemaining(0), '0:00');
+  });
+
+  test('formats overtime counting up', function () {
+    eq(S.formatRemaining(-1), '+0:01');
+    eq(S.formatRemaining(-75), '+1:15');
+  });
+
+  /* ---------------------------------------------------------------- summary */
+  var summary = document.getElementById('summary');
+  summary.className = failed ? 'bad' : 'ok';
+  summary.textContent = failed
+    ? failed + ' failed, ' + passed + ' passed'
+    : 'All ' + passed + ' tests passed';
+})();
+</script>
+</body>
+</html>
