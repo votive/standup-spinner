@@ -380,7 +380,10 @@
   'use strict';
   var S = global.Spinner;
   var TAU = S.TAU;
-  var POINTER_ANGLE = -Math.PI / 2; /* twelve o'clock */
+  /* Three o'clock: the winning wedge lands on the right, where its label is
+   * already running horizontally and is read without tilting your head. */
+  var POINTER_ANGLE = 0;
+  var POINTER_OVERHANG = 0.055;
 
   function Wheel(canvas) {
     this.canvas = canvas;
@@ -435,7 +438,9 @@
 
     var cx = this.width / 2, cy = this.height / 2;
     var rimWidth = Math.max(8, size * 0.046);
-    var outer = size / 2 - 2;
+    /* The marker overhangs the rim, so the wheel is inset to leave room for
+       it rather than letting it clip against the canvas edge. */
+    var outer = size / 2 - 2 - size * POINTER_OVERHANG;
     var radius = outer - rimWidth;
     var palette = this.palette;
 
@@ -510,10 +515,10 @@
     this.drawLabel(ctx, cx, cy, radius, start + sweep / 2, sweep, wedge, ink);
   };
 
-  /* Labels run along the radius, reading outward toward the rim, and flip on
-   * the left half so nothing is ever upside down. Radial beats tangential at
-   * every roster size: a long name has the whole radius to live in, and the
-   * text stays horizontal-ish where you actually look. */
+  /* Labels run along the radius, reading outward toward the rim, at a uniform
+   * orientation all the way round — so the left half sits upside down, the way
+   * a real wheel's lettering does. The marker is at three o'clock, so the wedge
+   * that actually matters is always the right way up. */
   Wheel.prototype.drawLabel = function (ctx, cx, cy, radius, mid, sweep, wedge, ink) {
     var size = this.size;
     var weight = wedge.spoken ? '500' : '700';
@@ -524,32 +529,27 @@
     var fontSize = Math.min(size * 0.055, sweep * radius * 0.24);
     fontSize = Math.max(10, fontSize);
 
-    var flipped = Math.cos(mid) < 0;
-
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(mid);
-    if (flipped) ctx.rotate(Math.PI);
 
     ctx.fillStyle = ink;
     ctx.textBaseline = 'middle';
-    ctx.textAlign = flipped ? 'left' : 'right';
+    ctx.textAlign = 'right';
     ctx.shadowColor = 'rgba(0,0,0,.35)';
     ctx.shadowBlur = size * 0.008;
 
-    var x = flipped ? -outerStop : outerStop;
     var text = fitText(ctx, wedge.name, maxWidth, fontSize, weight);
-    ctx.fillText(text.label, x, 0);
+    ctx.fillText(text.label, outerStop, 0);
 
     if (wedge.spoken) {
       var w = ctx.measureText(text.label).width;
-      var left = flipped ? x : x - w;
       ctx.shadowBlur = 0;
       ctx.strokeStyle = ink;
       ctx.lineWidth = Math.max(1, text.size * 0.08);
       ctx.beginPath();
-      ctx.moveTo(left, 0);
-      ctx.lineTo(left + w, 0);
+      ctx.moveTo(outerStop - w, 0);
+      ctx.lineTo(outerStop, 0);
       ctx.stroke();
     }
     ctx.restore();
@@ -567,11 +567,15 @@
       size -= 0.5;
       font(size);
     }
+    /* Only truncate a label that genuinely does not fit: measuring the
+       ellipsis unconditionally would clip names that fit perfectly well. */
     var text = label;
-    while (ctx.measureText(text + '…').width > maxWidth && text.length > 1) {
-      text = text.slice(0, -1);
+    if (ctx.measureText(text).width > maxWidth) {
+      while (ctx.measureText(text + '…').width > maxWidth && text.length > 1) {
+        text = text.slice(0, -1);
+      }
+      text += '…';
     }
-    if (text !== label) text += '…';
     return { label: text, size: size };
   }
 
@@ -614,29 +618,54 @@
     ctx.shadowBlur = 0;
   };
 
+  /* Anchored on the rim at POINTER_ANGLE and pointing inward, so moving the
+   * marker is a one-constant change. Deliberately not in the theme's accent
+   * colour: a gold marker vanishes against a gold rim. */
   Wheel.prototype.drawPointer = function (ctx, cx, cy, outer, rimWidth) {
     var size = this.size;
-    var w = size * 0.042;
-    var h = size * 0.09;
-    var tipY = cy - outer + rimWidth * 1.75;
+    var halfWidth = size * 0.045;
+    var length = size * 0.1;
+    var overlap = size * 0.03;
+    /* The tip sits inside the wedges by `overlap`, so which wedge it is on is
+       never in question; the base overhangs the rim's outer edge. */
+    var tipRadius = outer - rimWidth - overlap + length;
 
     ctx.save();
-    ctx.translate(cx, tipY - h);
-    ctx.rotate(this.pointerKick);
+    ctx.translate(cx, cy);
+    ctx.rotate(POINTER_ANGLE);
+    ctx.translate(tipRadius, 0);
+    ctx.rotate(Math.PI / 2 + this.pointerKick);
+
     ctx.beginPath();
-    ctx.moveTo(0, h);
-    ctx.lineTo(-w, -h * 0.35);
-    ctx.quadraticCurveTo(0, -h * 0.75, w, -h * 0.35);
+    ctx.moveTo(0, length);
+    ctx.lineTo(-halfWidth, 0);
+    ctx.lineTo(halfWidth, 0);
     ctx.closePath();
-    var grad = ctx.createLinearGradient(0, -h, 0, h);
+
+    var grad = ctx.createLinearGradient(-halfWidth, 0, halfWidth, 0);
     grad.addColorStop(0, '#ffffff');
-    grad.addColorStop(0.5, this.palette.accent);
-    grad.addColorStop(1, S.shade(this.palette.accent, -0.45));
+    grad.addColorStop(0.45, '#f4f4f6');
+    grad.addColorStop(1, '#b9bcc6');
     ctx.fillStyle = grad;
-    ctx.shadowColor = 'rgba(0,0,0,.6)';
-    ctx.shadowBlur = size * 0.02;
-    ctx.shadowOffsetY = size * 0.004;
+    ctx.shadowColor = 'rgba(0,0,0,.55)';
+    ctx.shadowBlur = size * 0.022;
     ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(12,10,14,.8)';
+    ctx.lineWidth = Math.max(1.5, size * 0.005);
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    /* The hub the flapper pivots on. */
+    ctx.beginPath();
+    ctx.arc(0, 0, halfWidth * 0.6, 0, TAU);
+    var capGrad = ctx.createLinearGradient(0, -halfWidth, 0, halfWidth);
+    capGrad.addColorStop(0, '#ffffff');
+    capGrad.addColorStop(1, '#8e919b');
+    ctx.fillStyle = capGrad;
+    ctx.fill();
+    ctx.stroke();
     ctx.restore();
   };
 
