@@ -846,21 +846,46 @@
     var self = this;
     var victims = this.wedges.filter(predicate);
     if (!victims.length) { done(); return; }
-    var start = null;
+
     var duration = prefersReducedMotion() ? 0 : 320;
+    var start = null;
+    var finish = guard(function () {
+      self.wedges = self.wedges.filter(function (w) { return victims.indexOf(w) === -1; });
+      self.draw();
+      done();
+    }, duration + 250);
+
     function frame(now) {
+      if (finish.settled) return;
       if (start === null) start = now;
       var t = duration ? Math.min(1, (now - start) / duration) : 1;
       var eased = 1 - Math.pow(1 - t, 3);
       victims.forEach(function (w) { w.weight = 1 - eased; });
       self.draw();
       if (t < 1) { global.requestAnimationFrame(frame); return; }
-      self.wedges = self.wedges.filter(function (w) { return victims.indexOf(w) === -1; });
-      self.draw();
-      done();
+      finish();
     }
     global.requestAnimationFrame(frame);
   };
+
+  /* Animations are driven by requestAnimationFrame, which browsers stop
+   * entirely for a hidden tab. A facilitator who presses Spin and then
+   * switches tabs would come back to a wheel frozen mid-turn with the rest of
+   * the app locked behind it, so every animation also carries a timer that
+   * settles it regardless. The timer is the backstop; whichever fires first
+   * wins, and the other becomes a no-op.
+   */
+  function guard(settle, after) {
+    var wrapped = function () {
+      if (wrapped.settled) return;
+      wrapped.settled = true;
+      global.clearTimeout(wrapped.timer);
+      settle();
+    };
+    wrapped.settled = false;
+    wrapped.timer = global.setTimeout(wrapped, after);
+    return wrapped;
+  }
 
   /* The winner is already decided; this only animates the journey to them
    * (ADR 0003). onTick fires each time a wedge boundary passes the pointer. */
@@ -871,20 +896,24 @@
     var start = this.rotation;
     var turns = 4 + Math.floor(Math.random() * 3);
     var end = S.solveRotation(start, winnerIndex, count, turns);
+    var duration = prefersReducedMotion() ? 0 : 4000;
 
-    if (prefersReducedMotion()) {
-      this.rotation = end;
-      this.draw();
-      global.setTimeout(function () { opts.onDone && opts.onDone(); }, 400);
-      return;
-    }
+    this.spinning = true;
+    var finish = guard(function () {
+      self.rotation = end;
+      self.pointerKick = 0;
+      self.spinning = false;
+      self.draw();
+      if (opts.onDone) opts.onDone();
+    }, duration + 400);
 
-    var duration = 4000;
+    if (!duration) { finish(); return; }
+
     var startedAt = null;
     var lastWedge = S.wedgeAtPointer(start, count);
-    this.spinning = true;
 
     function frame(now) {
+      if (finish.settled) return;
       if (startedAt === null) startedAt = now;
       var t = Math.min(1, (now - startedAt) / duration);
       var eased = 1 - Math.pow(1 - t, 4.2);
@@ -895,17 +924,13 @@
       if (wedge !== lastWedge) {
         lastWedge = wedge;
         self.pointerKick = 0.42;
-        opts.onTick && opts.onTick(1 - t);
+        if (opts.onTick) opts.onTick(1 - t);
       }
       self.pointerKick *= 0.82;
 
       self.draw();
       if (t < 1) { global.requestAnimationFrame(frame); return; }
-      self.rotation = end;
-      self.pointerKick = 0;
-      self.spinning = false;
-      self.draw();
-      opts.onDone && opts.onDone();
+      finish();
     }
     global.requestAnimationFrame(frame);
   };
