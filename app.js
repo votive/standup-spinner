@@ -935,6 +935,18 @@
     global.requestAnimationFrame(frame);
   };
 
+  /* Where the pointer's tip is on screen, in viewport pixels: the point the
+   * celebration bursts from. */
+  Wheel.prototype.pointerTip = function () {
+    var rect = this.canvas.getBoundingClientRect();
+    var m = this.metrics();
+    var tip = m.outer - m.rimWidth - this.size * 0.03;
+    return {
+      x: rect.left + m.cx + Math.cos(POINTER_ANGLE) * tip,
+      y: rect.top + m.cy + Math.sin(POINTER_ANGLE) * tip
+    };
+  };
+
   function prefersReducedMotion() {
     return global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
@@ -1023,6 +1035,34 @@
     }
   };
 
+  /* Party poppers: a burst of filtered noise for each corner cannon, a beat
+   * apart, under the landing chord. */
+  Sound.prototype.pop = function () {
+    if (this.muted || !this.ctx) return;
+    var ctx = this.ctx;
+    var length = Math.floor(ctx.sampleRate * 0.25);
+    var buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    for (var i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 3);
+    }
+    [0, 0.07, 0.32].forEach(function (delay, n) {
+      var at = ctx.currentTime + delay;
+      var source = ctx.createBufferSource();
+      var filter = ctx.createBiquadFilter();
+      var gain = ctx.createGain();
+      source.buffer = buffer;
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(n === 2 ? 1400 : 1900, at);
+      filter.Q.value = 0.8;
+      gain.gain.setValueAtTime(n === 2 ? 0.12 : 0.2, at);
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      source.start(at);
+    });
+  };
+
   Sound.prototype.sting = function () {
     var notes = [440, 554.37, 659.25];
     for (var i = 0; i < notes.length; i++) {
@@ -1050,6 +1090,384 @@
   };
 
   global.SpinnerSound = Sound;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+/* ================================================================ CONFETTI
+ * The celebration when the wheel lands. A full-screen canvas over the stage,
+ * never catching a click, that draws nothing and costs nothing at rest.
+ *
+ * Unlike the spin it holds no lock, so it needs no timer backstop (ADR 0010):
+ * if the tab is hidden the pieces simply wait, and anything older than
+ * MAX_AGE is dropped on the first frame back rather than replayed.
+ */
+(function (global) {
+  'use strict';
+  var S = global.Spinner;
+  var TAU = S.TAU;
+  var MAX_AGE = 11;
+  var MAX_PIECES = 1400;
+
+  function Confetti(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.pieces = [];
+    this.queue = [];
+    this.running = false;
+    this.clock = 0;
+    this.lastFrame = 0;
+    this.firedAt = 0;
+    this.width = 0;
+    this.height = 0;
+    this.dpr = 1;
+    this.colours = [];
+    this.glitter = [];
+    this.lightTheme = false;
+    this.frame = this.frame.bind(this);
+  }
+
+  /* Every piece is cut from the theme, so the celebration looks like it
+     belongs to the wheel it came off. Each colour carries a darker back face
+     and a bright glint for the moment it catches the light. */
+  Confetti.prototype.setTheme = function (palette) {
+    var seen = {};
+    var base = palette.wedges.concat([palette.accent, palette.rim]).filter(function (hex) {
+      var key = hex.toLowerCase();
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+    this.lightTheme = S.relativeLuminance(palette.text) < 0.2;
+    this.colours = base.map(function (hex) {
+      return { front: hex, back: S.shade(hex, -0.38), glint: S.shade(hex, 0.55) };
+    });
+    this.glitter = this.lightTheme
+      ? [palette.accent, S.shade(palette.accent, -0.2), '#ffffff']
+      : ['#ffffff', palette.accent, S.shade(palette.accent, 0.5)];
+  };
+
+  Confetti.prototype.resize = function () {
+    this.dpr = Math.min(2, global.devicePixelRatio || 1);
+    this.width = global.innerWidth;
+    this.height = global.innerHeight;
+    this.canvas.width = Math.round(this.width * this.dpr);
+    this.canvas.height = Math.round(this.height * this.dpr);
+  };
+
+  /* One celebration, choreographed: a burst off the pointer tip, party
+     cannons from both bottom corners, a second volley, then a brief fall of
+     paper from above to fill the screen as it settles. */
+  Confetti.prototype.celebrate = function (origin) {
+    if (prefersReducedMotion() || !this.colours.length) return;
+    this.resize();
+    var w = this.width, h = this.height;
+    var k = scale(w, h);
+    var self = this;
+    var at = this.clock;
+    var ox = origin ? origin.x : w / 2;
+    var oy = origin ? origin.y : h / 2;
+
+    this.burst(ox, oy, k);
+
+    this.cannon(0, h, -58, 120, 1, k);
+    this.cannon(w, h, -122, 120, 1, k);
+    this.later(at + 0.32, function () {
+      self.cannon(0, h * 0.82, -48, 70, 0.8, k);
+      self.cannon(w, h * 0.82, -132, 70, 0.8, k);
+    });
+    this.later(at + 0.5, function () { self.rain(90, k); });
+
+    this.firedAt = now();
+    this.start();
+  };
+
+  Confetti.prototype.later = function (when, fn) {
+    this.queue.push({ at: when, fn: fn });
+  };
+
+  /* Radial pop off the pointer, weighted outward to the right where the
+     pointer faces, with glitter mixed in for sparkle. */
+  Confetti.prototype.burst = function (x, y, k) {
+    for (var i = 0; i < 110; i++) {
+      var angle = Math.random() < 0.6
+        ? rand(-1.1, 1.1)
+        : rand(0, TAU);
+      var speed = rand(260, 1250) * k;
+      this.add(this.piece(pickKind(0.62, 0.2), x, y, angle, speed, k));
+    }
+    for (var j = 0; j < 60; j++) {
+      this.add(this.piece('glitter', x, y, rand(0, TAU), rand(120, 900) * k, k));
+    }
+  };
+
+  Confetti.prototype.cannon = function (x, y, degrees, count, power, k) {
+    var centre = degrees * Math.PI / 180;
+    for (var i = 0; i < count; i++) {
+      var angle = centre + rand(-0.26, 0.26);
+      var speed = rand(0.5, 1) * rand(1800, 2600) * power * k;
+      var kind = pickKind(0.7, 0.16);
+      this.add(this.piece(kind, x + rand(-8, 8), y + rand(-8, 8), angle, speed, k));
+    }
+    for (var j = 0; j < count / 4; j++) {
+      this.add(this.piece('glitter', x, y, centre + rand(-0.3, 0.3), rand(700, 1800) * power * k, k));
+    }
+  };
+
+  /* Heavier than the cannon paper and short-lived, so it passes through
+     rather than lingering over the clock someone is about to start. */
+  Confetti.prototype.rain = function (count, k) {
+    for (var i = 0; i < count; i++) {
+      var p = this.piece(pickKind(0.78, 0.22), rand(0, this.width), rand(-120, -10), Math.PI / 2, rand(220, 420) * k, k);
+      p.gravity *= 1.8;
+      p.age = -rand(0, 0.5);
+      p.life = rand(2.6, 3.4);
+      this.add(p);
+    }
+  };
+
+  /* The turn has started: whatever is still in the air fades out now. */
+  Confetti.prototype.hurry = function () {
+    this.queue = [];
+    this.pieces.forEach(function (p) {
+      p.life = Math.min(p.life, Math.max(0, p.age) + 0.8);
+    });
+  };
+
+  Confetti.prototype.add = function (piece) {
+    if (this.pieces.length < MAX_PIECES) this.pieces.push(piece);
+  };
+
+  Confetti.prototype.piece = function (kind, x, y, angle, speed, k) {
+    var colour = this.colours[Math.floor(Math.random() * this.colours.length)];
+    var p = {
+      kind: kind,
+      x: x, y: y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      rot: rand(0, TAU),
+      spin: rand(-7, 7),
+      tilt: rand(0, TAU),
+      flip: rand(4, 13) * (Math.random() < 0.5 ? -1 : 1),
+      wobble: rand(0, TAU),
+      wobbleRate: rand(2.2, 5),
+      colour: colour,
+      age: 0,
+      life: rand(5.5, 8.5),
+      k: k
+    };
+
+    if (kind === 'paper') {
+      p.w = rand(8, 15) * k;
+      p.h = rand(5, 8.5) * k;
+      p.drag = rand(2.6, 3.6);
+      p.gravity = 720 * k;
+      p.flutter = rand(40, 90) * k;
+    } else if (kind === 'disc') {
+      p.w = p.h = rand(4.5, 7.5) * k;
+      p.drag = rand(2.2, 3);
+      p.gravity = 760 * k;
+      p.flutter = rand(20, 50) * k;
+    } else if (kind === 'ribbon') {
+      p.w = rand(2.6, 4) * k;
+      p.h = rand(26, 46) * k;
+      p.drag = rand(2.4, 3.2);
+      p.gravity = 560 * k;
+      p.flutter = rand(30, 70) * k;
+      p.curl = rand(7, 12) * k;
+      p.trail = [];
+    } else {
+      var hue = this.glitter[Math.floor(Math.random() * this.glitter.length)];
+      p.colour = { front: hue, back: hue, glint: '#ffffff' };
+      p.w = rand(1.6, 3.6) * k;
+      p.drag = rand(1.6, 2.4);
+      p.gravity = 380 * k;
+      p.flutter = rand(10, 30) * k;
+      p.life = rand(1.6, 3.4);
+      p.twinkle = rand(10, 22);
+    }
+    return p;
+  };
+
+  Confetti.prototype.start = function () {
+    if (this.running) return;
+    this.running = true;
+    this.lastFrame = 0;
+    global.requestAnimationFrame(this.frame);
+  };
+
+  Confetti.prototype.stop = function () {
+    this.running = false;
+    this.pieces = [];
+    this.queue = [];
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  };
+
+  Confetti.prototype.frame = function (stamp) {
+    if (!this.running) return;
+    /* A long gap means the tab was hidden: step gently rather than teleport,
+       and give up entirely on a celebration nobody saw. */
+    var dt = this.lastFrame ? Math.min(1 / 30, (stamp - this.lastFrame) / 1000) : 1 / 60;
+    this.lastFrame = stamp;
+    if ((now() - this.firedAt) / 1000 > MAX_AGE) { this.stop(); return; }
+
+    this.clock += dt;
+    var clock = this.clock;
+    this.queue = this.queue.filter(function (job) {
+      if (job.at > clock) return true;
+      job.fn();
+      return false;
+    });
+
+    this.update(dt);
+    this.draw();
+
+    if (this.pieces.length || this.queue.length) {
+      global.requestAnimationFrame(this.frame);
+    } else {
+      this.stop();
+    }
+  };
+
+  Confetti.prototype.update = function (dt) {
+    var floor = this.height + 60;
+    var live = [];
+    for (var i = 0; i < this.pieces.length; i++) {
+      var p = this.pieces[i];
+      p.age += dt;
+      if (p.age < 0) { live.push(p); continue; }
+
+      var damp = Math.exp(-p.drag * dt);
+      p.vx *= damp;
+      p.vy = p.vy * damp + p.gravity * dt;
+      p.wobble += p.wobbleRate * dt;
+      /* Flutter only shows once the launch has bled off: paper that is
+         still flying does not drift, paper that is falling does. */
+      var calm = Math.max(0, 1 - Math.abs(p.vx) / (400 * p.k));
+      p.x += (p.vx + Math.sin(p.wobble) * p.flutter * calm) * dt;
+      p.y += p.vy * dt;
+      p.rot += p.spin * dt;
+      p.tilt += p.flip * dt;
+
+      if (p.trail) {
+        p.trail.unshift({
+          x: p.x + Math.cos(p.wobble * 2.2) * p.curl,
+          y: p.y + Math.sin(p.wobble * 2.2) * p.curl * 0.4
+        });
+        if (p.trail.length > 9) p.trail.pop();
+      }
+
+      if (p.age < p.life && p.y < floor && p.x > -80 && p.x < this.width + 80) live.push(p);
+    }
+    this.pieces = live;
+  };
+
+  Confetti.prototype.draw = function () {
+    var ctx = this.ctx;
+    var dpr = this.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+
+    for (var i = 0; i < this.pieces.length; i++) {
+      var p = this.pieces[i];
+      if (p.age < 0 || p.kind === 'glitter') continue;
+      ctx.globalAlpha = fade(p);
+      if (p.kind === 'ribbon') this.drawRibbon(ctx, dpr, p);
+      else this.drawPaper(ctx, dpr, p);
+    }
+
+    /* Glitter last, and additive on dark themes so it actually sparkles. */
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = this.lightTheme ? 'source-over' : 'lighter';
+    for (var j = 0; j < this.pieces.length; j++) {
+      var g = this.pieces[j];
+      if (g.kind !== 'glitter' || g.age < 0) continue;
+      var shimmer = 0.35 + 0.65 * Math.abs(Math.sin(g.age * g.twinkle + g.wobble));
+      ctx.globalAlpha = fade(g) * shimmer;
+      drawSparkle(ctx, g.x, g.y, g.w * (0.7 + shimmer * 0.6), g.colour.front);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  };
+
+  /* A flat rectangle tumbling in 3D: rotating in the plane of the screen and
+     flipping about its own axis, which squashes it and shows its back. */
+  Confetti.prototype.drawPaper = function (ctx, dpr, p) {
+    var face = Math.cos(p.tilt);
+    var cr = Math.cos(p.rot), sr = Math.sin(p.rot);
+    var squash = Math.max(0.08, Math.abs(face));
+    ctx.setTransform(dpr * cr, dpr * sr, -dpr * sr * squash, dpr * cr * squash, dpr * p.x, dpr * p.y);
+    ctx.fillStyle = face > 0.93 ? p.colour.glint : (face > 0 ? p.colour.front : p.colour.back);
+    if (p.kind === 'disc') {
+      ctx.beginPath();
+      ctx.arc(0, 0, p.w / 2, 0, TAU);
+      ctx.fill();
+    } else {
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    }
+  };
+
+  /* A curling streamer: the piece drags a short history of positions behind
+     it, drawn as a ribbon whose width tracks how edge-on it is. */
+  Confetti.prototype.drawRibbon = function (ctx, dpr, p) {
+    var trail = p.trail;
+    if (trail.length < 2) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (var i = 1; i < trail.length; i++) {
+      var face = Math.cos(p.tilt - i * 0.45);
+      ctx.strokeStyle = face > 0.9 ? p.colour.glint : (face > 0 ? p.colour.front : p.colour.back);
+      ctx.lineWidth = p.w * (0.35 + 0.65 * Math.abs(face));
+      ctx.beginPath();
+      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+      ctx.lineTo(trail[i].x, trail[i].y);
+      ctx.stroke();
+    }
+  };
+
+  function drawSparkle(ctx, x, y, size, colour) {
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.moveTo(x, y - size * 2.2);
+    ctx.quadraticCurveTo(x, y, x + size * 2.2, y);
+    ctx.quadraticCurveTo(x, y, x, y + size * 2.2);
+    ctx.quadraticCurveTo(x, y, x - size * 2.2, y);
+    ctx.quadraticCurveTo(x, y, x, y - size * 2.2);
+    ctx.fill();
+  }
+
+  function fade(p) {
+    var left = p.life - p.age;
+    return left < 0.8 ? Math.max(0, left / 0.8) : 1;
+  }
+
+  /* Tuned on a laptop screen; a wall display gets bigger pieces thrown
+     further, a phone smaller ones. */
+  function scale(w, h) {
+    return Math.max(0.55, Math.min(1.7, Math.min(w, h) / 820));
+  }
+
+  function pickKind(paper, ribbon) {
+    var roll = Math.random();
+    if (roll < paper) return 'paper';
+    if (roll < paper + ribbon) return 'ribbon';
+    return 'disc';
+  }
+
+  function rand(min, max) {
+    return min + Math.random() * (max - min);
+  }
+
+  function now() {
+    return global.performance && global.performance.now ? global.performance.now() : Date.now();
+  }
+
+  function prefersReducedMotion() {
+    return global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  global.SpinnerConfetti = Confetti;
 })(typeof window !== 'undefined' ? window : globalThis);
 
 /* ==================================================================== BOOT
@@ -1124,6 +1542,7 @@
 
   var wheel = new global.SpinnerWheel(els.canvas);
   var sound = new global.SpinnerSound();
+  var confetti = new global.SpinnerConfetti(doc.getElementById('confetti'));
 
   /* The hub is a DOM button sitting over the canvas, so it has to track the
      circle the canvas actually drew rather than the element's own box. */
@@ -1143,6 +1562,7 @@
     root.setProperty('--text', palette.text);
     root.setProperty('--scrim', state.board.background ? '0.55' : '0');
     wheel.setTheme(palette);
+    confetti.setTheme(palette);
     loadBackground(state.board.background);
   }
 
@@ -1188,6 +1608,7 @@
     if (timer.running) return;
     sound.unlock();
     sound.sting();
+    confetti.hurry();
     timer.running = true;
     timer.everStarted = true;
     timer.since = Date.now();
@@ -1718,6 +2139,10 @@
   }
 
   function land(winner) {
+    /* Measured before render(): the speaker view slides the wheel aside. */
+    confetti.celebrate(wheel.pointerTip());
+    sound.pop();
+    popName();
     state.speaker = winner;
     if (state.spoken.indexOf(winner) === -1) state.spoken.push(winner);
     state.busy = false;
@@ -1729,6 +2154,13 @@
     sound.land();
     saveSession();
     announce(winner + ' is up. ' + S.formatClock(state.board.turnSeconds) + ' on the clock.');
+  }
+
+  /* Restarting a CSS animation needs the class off for one layout pass. */
+  function popName() {
+    els.speakerName.classList.remove('pop');
+    void els.speakerName.offsetWidth;
+    els.speakerName.classList.add('pop');
   }
 
   function finishRound() {
