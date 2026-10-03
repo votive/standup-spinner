@@ -298,6 +298,28 @@ body {
 .timer.warning .fill { background: #ffb020; }
 .timer.overtime .fill { background: #ff5a52; }
 
+/* Auto-start: the bar fills while the clock waits to start itself, then the
+   clock kicks as it goes. The kick plays on a manual start too. */
+.timer.arming .fill { animation: timer-arm var(--arm, 2500ms) linear both; }
+.timer.started .clock { animation: clock-go .7s cubic-bezier(.2, 1.6, .4, 1); transform-origin: 0 60%; }
+.timer.started .track { animation: track-go .7s ease-out; }
+
+@keyframes timer-arm {
+  from { transform: scaleX(0); opacity: .45; }
+  to   { transform: scaleX(1); opacity: 1; }
+}
+
+@keyframes clock-go {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.12); color: var(--accent); text-shadow: 0 0 28px var(--accent); }
+  100% { transform: scale(1); }
+}
+
+@keyframes track-go {
+  0%   { box-shadow: 0 0 0 0 var(--accent); }
+  100% { box-shadow: 0 0 0 12px transparent; }
+}
+
 .timer-controls { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .btn {
@@ -652,6 +674,7 @@ input[type="number"] {
 
 @media (prefers-reduced-motion: reduce) {
   .setup, .stage, .toast, .speaker-name.pop { transition-duration: .01ms; animation: none; }
+  .timer.arming .fill, .timer.started .clock, .timer.started .track { animation: none; }
 }
 
 /* --------------------------------------------------------- theme controls */
@@ -733,3 +756,87 @@ input[type="url"] {
 
 input[type="url"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input[type="url"].invalid { border-color: #ff5a52; }
+
+/* -------------------------------------------------------- custom colours */
+.colours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.colour-chip {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 44px;
+}
+
+.colour-chip input[type="color"] {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.28);
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.colour-chip input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.colour-chip input[type="color"]::-webkit-color-swatch { border: none; }
+.colour-chip input[type="color"]::-moz-color-swatch { border: none; }
+.colour-chip input[type="color"]:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.colour-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.3);
+  background: rgba(22, 18, 20, .95);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.colour-remove:hover { background: rgba(255, 90, 82, .5); }
+.colour-remove:focus-visible, .colour-add:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.colour-remove:disabled { display: none; }
+
+.colour-add {
+  width: 44px;
+  height: 44px;
+  font: inherit;
+  font-size: 20px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255,255,255,.3);
+  background: rgba(255,255,255,.05);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.colour-add:hover { background: rgba(255,255,255,.12); }
+
+.btn-small { margin-top: 10px; padding: 7px 14px; font-size: 12px; }
+
+.field label.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.check input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }

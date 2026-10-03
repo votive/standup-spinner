@@ -58,8 +58,15 @@ The three things a Speaker is expected to cover during their Turn: yesterday, to
 _Avoid_: questions, agenda
 
 **Theme**:
-A named, hand-designed palette that determines wedge colours, background and accents. Chosen by name in the Board, not assembled from individual colour values.
+A named, hand-designed palette that determines wedge colours, background and accents. Chosen by name in the Board.
 _Avoid_: skin, style, colour scheme
+
+**Custom colours**:
+A Board's own list of wedge colours, replacing the Theme's wedges and nothing else: the Theme still supplies the background, rim and accents. Picking a Theme discards them.
+_Avoid_: custom theme, colour scheme
+
+**Auto-start**:
+A Board setting under which the Turn's clock starts by itself a short beat after the Spin resolves, instead of waiting for someone to press Start. Off unless the Board asks for it.
 
 **End card**:
 The screen shown once no eligible participants remain: total elapsed time, speaking order, and who went into Overtime.

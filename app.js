@@ -14,11 +14,14 @@
   var MAX_TURN_SECONDS = 3600;
   var DEFAULT_PROMPTS = ['Yesterday', 'Today', 'Blockers'];
   var DEFAULT_THEME = 'showtime';
+  var MIN_CUSTOM_COLOURS = 2;
+  var MAX_CUSTOM_COLOURS = 12;
 
   /* ---------------------------------------------------------------- themes
-   * Hand-designed palettes (ADR: themes are chosen by name, never assembled
-   * from individual colour values). `wedges` cycles; `ink` is picked per
-   * wedge by luminance so labels always clear contrast.
+   * Hand-designed palettes, chosen by name. A Board may also carry its own
+   * wedge colours, which replace `wedges` and nothing else (ADR 0011).
+   * `wedges` cycles; `ink` is picked per wedge by measured contrast so labels
+   * stay readable whatever the colour.
    */
   var THEMES = {
     showtime: {
@@ -77,6 +80,25 @@
 
   function theme(name) {
     return THEMES[name] || THEMES[DEFAULT_THEME];
+  }
+
+  /* What the wheel is actually painted with: the Board's theme, with its
+   * wedges swapped for the Board's custom colours when it has any. */
+  function palette(board) {
+    var base = theme(board && board.theme);
+    var custom = (board && board.colours) || [];
+    if (custom.length < MIN_CUSTOM_COLOURS) return base;
+    var out = {};
+    Object.keys(base).forEach(function (key) { out[key] = base[key]; });
+    out.wedges = custom.slice(0, MAX_CUSTOM_COLOURS);
+    return out;
+  }
+
+  /* '#abc', 'abc', 'AABBCC' -> '#aabbcc'; anything else -> ''. */
+  function normaliseHex(value) {
+    var h = String(value || '').trim().replace(/^#/, '').toLowerCase();
+    if (/^[0-9a-f]{3}$/.test(h)) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return /^[0-9a-f]{6}$/.test(h) ? '#' + h : '';
   }
 
   /* ------------------------------------------------------------ query string
@@ -149,13 +171,27 @@
       }
     }
 
+    /* Bad entries are dropped rather than sinking the rest; too few left to
+       tell wedges apart and the theme's own colours stand. */
+    var colours = splitEncodedList(q.colors, ',')
+      .map(normaliseHex)
+      .filter(function (hex) { return hex; })
+      .slice(0, MAX_CUSTOM_COLOURS);
+    if (colours.length < MIN_CUSTOM_COLOURS) colours = [];
+
     return {
       participants: participants,
       turnSeconds: turnSeconds,
       theme: themeName,
+      colours: colours,
       background: safeImageUrl(q.bg ? decodeSafe(q.bg) : ''),
-      prompts: prompts
+      prompts: prompts,
+      autoStart: q.autostart !== undefined && isOn(decodeSafe(q.autostart))
     };
+  }
+
+  function isOn(value) {
+    return /^(on|1|true|yes)$/i.test(String(value).trim());
   }
 
   /* Only http(s) images. Keeps javascript: and data: out of a URL that gets
@@ -175,6 +211,12 @@
     if (board.theme && board.theme !== DEFAULT_THEME) {
       parts.push('theme=' + encodeURIComponent(board.theme));
     }
+    /* Hex without the '#', which would otherwise have to travel as %23. */
+    var colours = (board.colours || []).map(normaliseHex).filter(function (hex) { return hex; });
+    if (colours.length >= MIN_CUSTOM_COLOURS) {
+      parts.push('colors=' + colours.slice(0, MAX_CUSTOM_COLOURS)
+        .map(function (hex) { return hex.slice(1); }).join(','));
+    }
     if (board.background) parts.push('bg=' + encodeURIComponent(board.background));
 
     var prompts = board.prompts || DEFAULT_PROMPTS;
@@ -183,6 +225,7 @@
     } else if (!sameList(prompts, DEFAULT_PROMPTS)) {
       parts.push('prompts=' + prompts.map(encodeURIComponent).join('|'));
     }
+    if (board.autoStart) parts.push('autostart=on');
     return parts.length ? '?' + parts.join('&') : '';
   }
 
@@ -453,12 +496,16 @@
   global.Spinner = {
     MAX_PARTICIPANTS: MAX_PARTICIPANTS,
     MAX_NAME_LENGTH: MAX_NAME_LENGTH,
+    MIN_CUSTOM_COLOURS: MIN_CUSTOM_COLOURS,
+    MAX_CUSTOM_COLOURS: MAX_CUSTOM_COLOURS,
     DEFAULT_TURN_SECONDS: DEFAULT_TURN_SECONDS,
     DEFAULT_PROMPTS: DEFAULT_PROMPTS,
     DEFAULT_THEME: DEFAULT_THEME,
     THEMES: THEMES,
     themeNames: themeNames,
     theme: theme,
+    palette: palette,
+    normaliseHex: normaliseHex,
     parseQuery: parseQuery,
     parseBoard: parseBoard,
     serializeBoard: serializeBoard,
@@ -1518,6 +1565,10 @@
     toastText: doc.getElementById('toastText'),
     toastUndo: doc.getElementById('toastUndo'),
     themes: doc.getElementById('themes'),
+    colours: doc.getElementById('colours'),
+    coloursHint: doc.getElementById('coloursHint'),
+    coloursReset: doc.getElementById('coloursReset'),
+    autoStart: doc.getElementById('autoStart'),
     background: doc.getElementById('background'),
     backgroundHint: doc.getElementById('backgroundHint'),
     muteToggle: doc.getElementById('muteToggle'),
@@ -1554,7 +1605,14 @@
 
   /* -------------------------------------------------------------- theming */
   function applyTheme() {
-    var palette = S.theme(state.board.theme);
+    applyPalette();
+    loadBackground(state.board.background);
+  }
+
+  /* Everything but the background image, which is reloaded from scratch and
+   * would flicker on every step of a colour being dragged. */
+  function applyPalette() {
+    var palette = S.palette(state.board);
     var root = doc.documentElement.style;
     root.setProperty('--bg', palette.bg);
     root.setProperty('--accent', palette.accent);
@@ -1563,7 +1621,6 @@
     root.setProperty('--scrim', state.board.background ? '0.55' : '0');
     wheel.setTheme(palette);
     confetti.setTheme(palette);
-    loadBackground(state.board.background);
   }
 
   /* Never block on someone else's CDN: the theme renders immediately and the
@@ -1591,6 +1648,7 @@
     accumulated: 0,
     everStarted: false,
     handle: null,
+    armed: null,
     announcedAt: {}
   };
   state.timer = timer;
@@ -1606,6 +1664,7 @@
 
   function startTimer() {
     if (timer.running) return;
+    disarmTimer();
     sound.unlock();
     sound.sting();
     confetti.hurry();
@@ -1615,6 +1674,33 @@
     timer.handle = global.setInterval(tickTimer, 200);
     tickTimer();
     saveSession();
+    pulseClock();
+  }
+
+  /* Auto-start waits a beat after the wheel lands: long enough for the name
+   * to be read and the thick of the confetti to fall, after which starting
+   * the clock clears what is left. The bar fills while it waits, so the start
+   * is seen coming; pressing Start, Next or Reset in the meantime wins. */
+  var AUTO_START_DELAY = 3000;
+
+  function armTimer() {
+    disarmTimer();
+    els.timer.style.setProperty('--arm', AUTO_START_DELAY + 'ms');
+    els.timer.classList.add('arming');
+    timer.armed = global.setTimeout(startTimer, AUTO_START_DELAY);
+  }
+
+  function disarmTimer() {
+    global.clearTimeout(timer.armed);
+    timer.armed = null;
+    els.timer.classList.remove('arming', 'started');
+  }
+
+  /* Restarting a CSS animation needs the class off for one layout pass. */
+  function pulseClock() {
+    els.timer.classList.remove('started');
+    void els.timer.offsetWidth;
+    els.timer.classList.add('started');
   }
 
   function pauseTimer() {
@@ -1628,6 +1714,7 @@
   }
 
   function resetTimer() {
+    disarmTimer();
     global.clearInterval(timer.handle);
     timer.handle = null;
     timer.running = false;
@@ -1699,7 +1786,7 @@
         colorIndex: S.paletteIndex(
           state.board.participants.indexOf(name),
           state.board.participants.length,
-          S.theme(state.board.theme).wedges.length
+          S.palette(state.board).wedges.length
         )
       };
     });
@@ -2002,14 +2089,154 @@
     }
   }
 
+  /* Picking a theme means wanting its wheel, so it replaces any custom
+   * colours — with an undo, because those took a while to choose. */
   function setTheme(name) {
+    var previous = { theme: state.board.theme, colours: state.board.colours };
     state.board.theme = name;
+    state.board.colours = [];
+    paletteChanged();
+
+    if (!previous.colours.length) return;
+    announce('Custom colours replaced by the ' + S.theme(name).label + ' theme.');
+    showToast('Custom colours replaced', function () {
+      state.board.theme = previous.theme;
+      state.board.colours = previous.colours;
+      paletteChanged();
+      announce('Custom colours restored.');
+    });
+  }
+
+  function paletteChanged() {
     syncUrl();
-    applyTheme();
+    applyPalette();
     updateThemeSelection();
+    renderColours();
     /* Wedge colours are drawn from the palette, so the wheel is rebuilt. */
     rebuildWheel();
     render();
+  }
+
+  /* ------------------------------------------------------ custom colours
+   * The editor always shows what the wheel is painted with. Until one is
+   * changed those are the theme's own colours and nothing is written to the
+   * Board; the first edit makes them the Board's (ADR 0011).
+   */
+  function renderColours() {
+    var colours = S.palette(state.board).wedges;
+    var custom = state.board.colours.length > 0;
+    var canRemove = colours.length > S.MIN_CUSTOM_COLOURS;
+
+    els.colours.textContent = '';
+    colours.forEach(function (hex, index) {
+      var chip = doc.createElement('span');
+      chip.className = 'colour-chip';
+
+      var input = doc.createElement('input');
+      input.type = 'color';
+      input.value = S.normaliseHex(hex);
+      input.setAttribute('aria-label', 'Wheel colour ' + (index + 1));
+      input.addEventListener('input', function () { setColour(index, input.value); });
+
+      var remove = doc.createElement('button');
+      remove.type = 'button';
+      remove.className = 'colour-remove';
+      remove.textContent = '×';
+      remove.disabled = !canRemove;
+      remove.setAttribute('aria-label', 'Remove wheel colour ' + (index + 1));
+      remove.addEventListener('click', function () { removeColour(index); });
+
+      chip.appendChild(input);
+      chip.appendChild(remove);
+      els.colours.appendChild(chip);
+    });
+
+    if (colours.length < S.MAX_CUSTOM_COLOURS) {
+      var add = doc.createElement('button');
+      add.type = 'button';
+      add.className = 'colour-add';
+      add.textContent = '+';
+      add.setAttribute('aria-label', 'Add a wheel colour');
+      add.addEventListener('click', addColour);
+      els.colours.appendChild(add);
+    }
+
+    els.coloursReset.hidden = !custom;
+    els.coloursHint.textContent = custom
+      ? 'Your own colours, saved in the link. The theme still sets the backdrop.'
+      : 'These come from the theme. Change, add or remove one to make the wheel your own.';
+  }
+
+  /* Starts from whatever is on the wheel now, so the first edit changes one
+   * colour rather than replacing all of them. */
+  function customColours() {
+    return S.palette(state.board).wedges.map(S.normaliseHex);
+  }
+
+  var colourSync = null;
+
+  /* Fires continuously while a colour is dragged, so the chips are left alone
+   * (rebuilding them would close the picker) and the URL is written once the
+   * dragging pauses: browsers ration history.replaceState. */
+  function setColour(index, hex) {
+    var colours = customColours();
+    var wasCustom = state.board.colours.length > 0;
+    colours[index] = S.normaliseHex(hex) || colours[index];
+    state.board.colours = colours;
+    applyPalette();
+    global.clearTimeout(colourSync);
+    colourSync = global.setTimeout(syncUrl, 200);
+    if (!wasCustom) {
+      els.coloursReset.hidden = false;
+      els.coloursHint.textContent =
+        'Your own colours, saved in the link. The theme still sets the backdrop.';
+    }
+  }
+
+  function addColour() {
+    var colours = customColours();
+    if (colours.length >= S.MAX_CUSTOM_COLOURS) return;
+    colours.push(freshColour(colours));
+    state.board.colours = colours;
+    paletteChanged();
+    var inputs = els.colours.querySelectorAll('input');
+    inputs[inputs.length - 1].focus();
+  }
+
+  function removeColour(index) {
+    var colours = customColours();
+    if (colours.length <= S.MIN_CUSTOM_COLOURS) return;
+    colours.splice(index, 1);
+    state.board.colours = colours;
+    paletteChanged();
+    var buttons = els.colours.querySelectorAll('button');
+    buttons[Math.min(index, buttons.length - 1)].focus();
+  }
+
+  /* A starting point for a new chip: the hue furthest from the wheel's first
+   * and last colours, which are the two it will sit between. */
+  function freshColour(colours) {
+    var best = '#888888', bestGap = -1;
+    for (var hue = 0; hue < 360; hue += 15) {
+      var candidate = hueToHex(hue);
+      var gap = Math.min(
+        S.colourDistance(candidate, colours[0]),
+        S.colourDistance(candidate, colours[colours.length - 1])
+      );
+      if (gap > bestGap) { bestGap = gap; best = candidate; }
+    }
+    return best;
+  }
+
+  /* A hue at moderate saturation and value: bright without being neon. */
+  function hueToHex(hue) {
+    var channel = function (offset) {
+      var k = (offset + hue / 60) % 6;
+      var v = 0.78 * (1 - 0.72 * Math.max(0, Math.min(k, 4 - k, 1)));
+      var hex = Math.round(v * 255).toString(16);
+      return hex.length < 2 ? '0' + hex : hex;
+    };
+    return '#' + channel(5) + channel(3) + channel(1);
   }
 
   function applyBackground(value) {
@@ -2030,6 +2257,8 @@
 
   function renderSetup() {
     renderThemes();
+    renderColours();
+    els.autoStart.checked = state.board.autoStart;
     if (doc.activeElement !== els.background) {
       els.background.value = state.board.background;
     }
@@ -2154,6 +2383,7 @@
     sound.land();
     saveSession();
     announce(winner + ' is up. ' + S.formatClock(state.board.turnSeconds) + ' on the clock.');
+    if (state.board.autoStart) armTimer();
   }
 
   /* Restarting a CSS animation needs the class off for one layout pass. */
@@ -2317,6 +2547,20 @@
 
   els.turnLength.addEventListener('change', function () {
     els.turnLength.value = state.board.turnSeconds;
+  });
+
+  /* Takes effect from the next landing: a turn already under way keeps
+     whatever its clock is doing, though switching it off calls off a start
+     that is still pending. */
+  els.autoStart.addEventListener('change', function () {
+    state.board.autoStart = els.autoStart.checked;
+    if (!state.board.autoStart) disarmTimer();
+    syncUrl();
+  });
+
+  els.coloursReset.addEventListener('click', function () {
+    setTheme(state.board.theme);
+    els.themes.querySelector('[aria-checked="true"]').focus();
   });
 
   els.canvas.addEventListener('click', handleWheelClick);

@@ -148,6 +148,46 @@
                           prompts: S.DEFAULT_PROMPTS }), '?p=Jo');
   });
 
+  test('reads custom wheel colours, with or without the hash', function () {
+    eq(S.parseBoard('?p=Jo&colors=c1121f,%23F2B705,0af').colours,
+       ['#c1121f', '#f2b705', '#00aaff']);
+  });
+
+  test('round-trips custom wheel colours', function () {
+    var colours = ['#112233', '#445566', '#778899'];
+    var qs = S.serializeBoard({ participants: ['Jo'], colours: colours });
+    eq(qs, '?p=Jo&colors=112233,445566,778899');
+    eq(S.parseBoard(qs).colours, colours);
+  });
+
+  test('drops malformed colours, and falls back to the theme when too few are left', function () {
+    eq(S.parseBoard('?p=Jo&colors=112233,banana,445566,12345').colours, ['#112233', '#445566']);
+    eq(S.parseBoard('?p=Jo&colors=112233,banana').colours, []);
+    eq(S.parseBoard('?p=Jo&colors=').colours, []);
+    eq(S.parseBoard('?p=Jo').colours, []);
+  });
+
+  test('caps custom colours at 12', function () {
+    var many = [];
+    for (var i = 0; i < 20; i++) many.push('0000' + (i + 16).toString(16));
+    eq(S.parseBoard('?p=Jo&colors=' + many.join(',')).colours.length, 12);
+  });
+
+  test('auto-start is off unless the board asks for it', function () {
+    eq(S.parseBoard('?p=Jo').autoStart, false);
+    eq(S.parseBoard('?p=Jo&autostart=on').autoStart, true);
+    eq(S.parseBoard('?p=Jo&autostart=1').autoStart, true);
+    eq(S.parseBoard('?p=Jo&autostart=off').autoStart, false);
+    eq(S.parseBoard('?p=Jo&autostart=banana').autoStart, false);
+    eq(S.parseBoard('?p=Jo&autostart').autoStart, false);
+  });
+
+  test('round-trips auto-start, and omits it when off', function () {
+    eq(S.serializeBoard({ participants: ['Jo'], autoStart: true }), '?p=Jo&autostart=on');
+    eq(S.serializeBoard({ participants: ['Jo'], autoStart: false }), '?p=Jo');
+    eq(S.parseBoard(S.serializeBoard({ participants: ['Jo'], autoStart: true })).autoStart, true);
+  });
+
   test('parses a roster pasted as lines of text', function () {
     eq(S.parseRosterText('  Ayesha \n\nTom B.\n  \nJo\n'), ['Ayesha', 'Tom B.', 'Jo']);
   });
@@ -305,6 +345,28 @@
         ok(ratio >= 4.5, name + ' wedge ' + wedge + ' is only ' + ratio.toFixed(2) + ':1');
       });
     });
+  });
+
+  test('custom colours replace the wedges and nothing else', function () {
+    var custom = S.palette({ theme: 'neon', colours: ['#112233', '#445566'] });
+    eq(custom.wedges, ['#112233', '#445566']);
+    eq(custom.accent, S.theme('neon').accent);
+    eq(custom.bg, S.theme('neon').bg);
+    eq(S.palette({ theme: 'neon', colours: [] }).wedges, S.theme('neon').wedges);
+    eq(S.palette({ theme: 'neon' }).wedges, S.theme('neon').wedges);
+    eq(S.theme('neon').wedges.length, 6, 'the theme itself is untouched');
+  });
+
+  test('any custom colour still gets a readable label', function () {
+    /* The worst case sits at the black/white crossover, a shade under the
+       4.5:1 the hand-made palettes are held to. */
+    for (var v = 0; v < 256; v++) {
+      var h = (v < 16 ? '0' : '') + v.toString(16);
+      ['#' + h + h + h, '#' + h + '0000', '#00' + h + '00', '#0000' + h].forEach(function (hex) {
+        var ratio = S.contrastRatio(hex, S.inkFor(hex));
+        ok(ratio >= 4.2, hex + ' is only ' + ratio.toFixed(2) + ':1');
+      });
+    }
   });
 
   test('ink is picked by measured contrast, not a guessed threshold', function () {

@@ -95,6 +95,13 @@
     </div>
 
     <div class="field">
+      <p class="field-label" id="coloursLabel">Wheel colours</p>
+      <div class="colours" id="colours" role="group" aria-labelledby="coloursLabel"></div>
+      <p class="hint" id="coloursHint"></p>
+      <button type="button" class="btn btn-small" id="coloursReset" hidden>Back to theme colours</button>
+    </div>
+
+    <div class="field">
       <label for="background">Background image</label>
       <input type="url" id="background" placeholder="https://…" spellcheck="false" autocomplete="off">
       <p class="hint" id="backgroundHint">Optional. Anything the wheel sits on gets dimmed so names stay readable.</p>
@@ -106,6 +113,10 @@
         <input type="number" id="turnLength" min="15" max="3600" step="15" inputmode="numeric">
         <span class="unit">seconds</span>
       </div>
+      <label class="check" for="autoStart">
+        <input type="checkbox" id="autoStart">
+        <span>Start the clock as soon as the wheel lands</span>
+      </label>
     </div>
 
     <div class="setup-actions">

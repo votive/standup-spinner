@@ -38,12 +38,17 @@ Everything lives in the query string. All of it is optional except the names.
 | `p` | The names, comma-separated | — |
 | `t` | Seconds per turn, 15–3600 | `120` |
 | `theme` | `showtime`, `neon`, `sunrise`, `forest`, `mono` or `candy` | `showtime` |
+| `colors` | Your own wheel colours: 2–12 hex values, comma-separated, no `#` | the theme's |
 | `bg` | A full `https://` address of a background image | none |
 | `prompts` | `off`, or your own separated by `\|` | `Yesterday\|Today\|Blockers` |
+| `autostart` | `on` starts the clock by itself, a couple of seconds after the wheel lands | `off` |
 
 ```
 index.html?p=Ayesha,Tom%20B.,Jo,Priya&t=90&theme=neon
+index.html?p=Ayesha,Tom%20B.,Jo,Priya&colors=0b3954,ff6663,e0ff4f,bfd7ea&autostart=on
 ```
+
+Custom colours repaint the wedges only; the theme still decides the backdrop, the rim and the accents. Both are in Setup too — **Wheel colours** and the tick-box under **Turn length**.
 
 Anything malformed falls back to its default rather than breaking, unknown parameters are ignored, and every parameter ever shipped keeps working — a link pinned in a channel two years ago will still open.
 
